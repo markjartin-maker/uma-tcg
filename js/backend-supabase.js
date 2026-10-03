@@ -47,7 +47,9 @@ window.SupabaseBackend = class SupabaseBackend {
   }
 
   async signUp(email, password, displayName) {
-    const data = this.check(await this.sb.auth.signUp({ email, password, options: { data: { display_name: displayName } } }));
+    const data = this.check(await this.sb.auth.signUp({ email, password, options: { data: { display_name: displayName },
+      // If email confirmation is on, the link in the email comes back to this site.
+      emailRedirectTo: location.origin + location.pathname } }));
     if (!data.session) return { needsConfirm: true };
     return this.loadMe(data.user);
   }
