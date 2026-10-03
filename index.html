@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Uma TCG</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800;900&family=Figtree:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="css/style.css?v=2026-10-03b">
+</head>
+<body data-view="auth">
+  <header id="topbar" class="topbar"></header>
+  <main id="view"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="modal-root"></div>
+
+  <!-- ?v=… makes browsers fetch fresh files after each update. -->
+  <!-- Supabase client (only used when config.js has your keys) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"></script>
+  <script src="js/keys.js?v=2026-10-03b"></script>
+  <script src="js/config.js?v=2026-10-03b"></script>
+  <script src="js/util.js?v=2026-10-03b"></script>
+  <script src="js/cards.js?v=2026-10-03b"></script>
+  <script src="js/game.js?v=2026-10-03b"></script>
+  <script src="js/backend-supabase.js?v=2026-10-03b"></script>
+  <script src="js/backend-demo.js?v=2026-10-03b"></script>
+  <script src="js/cropper.js?v=2026-10-03b"></script>
+  <script src="js/views-cards.js?v=2026-10-03b"></script>
+  <script src="js/views-decks.js?v=2026-10-03b"></script>
+  <script src="js/table.js?v=2026-10-03b"></script>
+  <script src="js/app.js?v=2026-10-03b"></script>
+</body>
+</html>
