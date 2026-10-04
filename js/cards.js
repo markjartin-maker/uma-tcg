@@ -309,8 +309,20 @@ window.Cards = (() => {
       h('span', { class: 'star-label' }, TYPE_LABEL[type]));
   }
 
-  function renderBack(size = 's', label) {
-    return h('div', { class: `card card-back sz-${size}` }, h('span', null, label || ''));
+  // Card sleeves: { image_url, border } chosen per deck. Border is one of
+  // SLEEVE_BORDERS or a #hex color.
+  const SLEEVE_BORDERS = [
+    { id: 'gold', label: 'Gold' }, { id: 'silver', label: 'Silver' }, { id: 'rainbow', label: 'Rainbow foil' },
+    { id: 'black', label: 'Black' }, { id: 'white', label: 'White' }, { id: 'none', label: 'No border' },
+  ];
+  function renderBack(size = 's', label, sleeve) {
+    if (!sleeve || (!sleeve.image_url && !sleeve.border)) return h('div', { class: `card card-back sz-${size}` }, h('span', null, label || ''));
+    const b = sleeve.border || 'gold';
+    const custom = /^#[0-9a-f]{3,8}$/i.test(b);
+    const style = custom ? { '--sleeve': b } : {};
+    if (sleeve.image_url) style['--sleeve-img'] = `url("${sleeve.image_url.startsWith('data:') || sleeve.image_url.startsWith('blob:') ? sleeve.image_url : encodeURI(sleeve.image_url)}")`;
+    return h('div', { class: `card card-back sleeved sz-${size} sb-${custom ? 'custom' : b}${sleeve.image_url ? ' has-img' : ''}`, style },
+      h('span', { class: 'sleeve-shine', 'aria-hidden': 'true' }), label ? h('span', { class: 'sleeve-label' }, label) : null);
   }
 
   // ---------- Tokens ----------
@@ -377,5 +389,5 @@ window.Cards = (() => {
     return errs;
   }
 
-  return { TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
+  return { SLEEVE_BORDERS, TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
 })();

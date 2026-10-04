@@ -174,10 +174,79 @@ window.DeckViews = (() => {
       warnBox.replaceChildren(...(w.length ? w.map(x => h('li', null, x)) : [h('li', { class: 'ok-text' }, 'Ready to play.')]));
     }
 
+    // ---- card sleeve: an image + a border, shown on this deck's card backs ----
+    let sleeveFile = null;
+    let sleevePreview = deck.sleeve && deck.sleeve.image_url || null;
+    const sleeveBox = h('div', { class: 'sleeve-box' });
+    const sleeveOf = () => ({ image_url: sleevePreview, border: (deck.sleeve && deck.sleeve.border) || 'gold' });
+    const setBorder = b => { deck.sleeve = { ...(deck.sleeve || {}), image_url: (deck.sleeve || {}).image_url || null, border: b }; drawSleeve(); };
+    const useSleeveImage = async f => {
+      if (!f || !/^image\//.test(f.type)) { U.toast("That isn't an image.", 'error'); return; }
+      if (f.size > 15 * 1024 * 1024) { U.toast('That image is over 15 MB.', 'error'); return; }
+      const r = await Cropper.open(f, { fullArt: true });
+      if (!r) return;
+      sleeveFile = r.file;
+      sleevePreview = r.url;
+      deck.sleeve = { ...(deck.sleeve || { border: 'gold' }) };
+      drawSleeve();
+    };
+    const sleeveFileIn = h('input', { type: 'file', id: 'dk-sleeve', accept: 'image/png,image/jpeg,image/webp,image/gif', hidden: true,
+      on: { change: e => { useSleeveImage(e.target.files[0]); e.target.value = ''; } } });
+    const colorIn = h('input', { type: 'color', id: 'dk-sleeve-color', 'aria-label': 'Custom border color',
+      value: /^#/.test((deck.sleeve || {}).border || '') ? deck.sleeve.border : '#e7b84b', on: { input: e => setBorder(e.target.value) } });
+    function drawSleeve() {
+      const cur = (deck.sleeve && deck.sleeve.border) || 'gold';
+      sleeveBox.replaceChildren(
+        h('div', { class: 'sleeve-preview' + (deck.sleeve ? '' : ' default') }, deck.sleeve ? Cards.renderBack('m', '', sleeveOf()) : Cards.renderBack('m', 'Default')),
+        h('div', { class: 'stack tight' },
+          h('div', { class: 'row wrap' },
+            h('button', { type: 'button', class: 'btn sm', on: { click: () => sleeveFileIn.click() } }, sleevePreview ? 'Change image' : 'Choose image'),
+            h('button', { type: 'button', class: 'btn sm ghost', on: { click: pasteSleeve } }, 'Paste'),
+            deck.sleeve ? h('button', { type: 'button', class: 'btn sm ghost', on: { click: () => { deck.sleeve = null; sleeveFile = null; sleevePreview = null; drawSleeve(); } } }, 'Default sleeve') : null),
+          h('span', { class: 'label' }, 'Border'),
+          h('div', { class: 'row wrap sleeve-borders' },
+            Cards.SLEEVE_BORDERS.map(b => h('button', { type: 'button', class: `chip-btn sb-chip sbc-${b.id}` + (cur === b.id ? ' on' : ''), 'aria-pressed': String(cur === b.id),
+              on: { click: () => setBorder(b.id) } }, b.label)),
+            h('label', { class: 'chip-btn sb-chip' + (/^#/.test(cur) ? ' on' : ''), for: 'dk-sleeve-color' }, colorIn, 'Custom')),
+          h('p', { class: 'hint' }, 'Drop or paste (Ctrl+V) an image here. Your opponent sees this on your deck, your hand and your face-down cards.')),
+        sleeveFileIn);
+    }
+    async function pasteSleeve() {
+      try {
+        const items = await navigator.clipboard.read();
+        for (const it of items) {
+          const type = it.types.find(t => t.startsWith('image/'));
+          if (type) { await useSleeveImage(new File([await it.getType(type)], 'sleeve.' + type.split('/')[1], { type })); return; }
+        }
+        U.toast('No image on the clipboard. Right-click an image → Copy image, then try again.', 'error');
+      } catch (e) { U.toast('Your browser blocked reading the clipboard. Press Ctrl+V (⌘V on Mac) on this page instead.', 'error'); }
+    }
+    for (const ev of ['dragenter', 'dragover']) sleeveBox.addEventListener(ev, e => { e.preventDefault(); sleeveBox.classList.add('over'); });
+    sleeveBox.addEventListener('dragleave', () => sleeveBox.classList.remove('over'));
+    sleeveBox.addEventListener('drop', e => {
+      e.preventDefault(); sleeveBox.classList.remove('over');
+      const f = [...(e.dataTransfer.files || [])].find(x => /^image\//.test(x.type));
+      if (f) useSleeveImage(f); else U.toast('Drop an image file.', 'error');
+    });
+    const onPaste = e => {
+      if (!sleeveBox.isConnected) { document.removeEventListener('paste', onPaste); return; }
+      if (document.querySelector('.modal-backdrop')) return;
+      const it = [...((e.clipboardData && e.clipboardData.items) || [])].find(x => x.kind === 'file' && /^image\//.test(x.type));
+      if (!it) return;
+      e.preventDefault();
+      useSleeveImage(it.getAsFile());
+    };
+    document.addEventListener('paste', onPaste);
+    drawSleeve();
+
     const save = h('button', { class: 'btn primary', on: { click: async () => {
       if (!deck.name.trim()) { U.toast('Give the deck a name.', 'error'); return; }
       save.disabled = true;
       try {
+        if (sleeveFile) {
+          deck.sleeve = { ...(deck.sleeve || { border: 'gold' }), image_url: await App.backend.uploadImage(sleeveFile) };
+          sleeveFile = null;
+        }
         const saved = await App.backend.saveDeck(deck);
         deck.id = saved.id;
         U.toast('Deck saved.', 'good');
@@ -206,6 +275,7 @@ window.DeckViews = (() => {
           leaderBox, starsBox,
           h('div', { class: 'field' }, h('label', { for: 'dk-champ' }, 'Champion slot (counts toward the deck)'), champSel),
           champBox,
+          h('div', { class: 'field' }, h('span', { class: 'label' }, 'Card sleeve'), sleeveBox),
           h('div', { class: 'deck-head' }, h('h3', null, 'Main deck'), countEl),
           listBox,
           warnBox))));

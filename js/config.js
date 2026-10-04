@@ -35,6 +35,9 @@ window.CONFIG = {
     USE_CHAIN: true,
     FANS_TO_WIN: 1000,
     MINI_LANE_FANS: 50,   // holding a mini lane at end of Ramp
+    // Score MINI_LANE_FANS automatically for each mini lane a player holds
+    // (only their cards there) whenever a fight check ends.
+    AUTO_HOLD_FANS: true,
     RACE_FANS: 150,       // only your units left at end of Race
     // After a Race ends, units still in the Lane go back to their owner's base.
     // Set to false to leave them in the Lane and move them by hand.

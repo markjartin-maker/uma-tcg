@@ -613,14 +613,32 @@ body[data-view=match] main { padding-block: 8px 0; }
 .track-seg.who-both { border-bottom-color: color-mix(in srgb, var(--rail) 35%, transparent); }
 .track-seg.done { opacity: .45; }
 .track-seg.now { color: var(--fg); background: rgba(255,255,255,.1); }
-.track-marker {
-  position: absolute; bottom: -7px; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%;
+/* the marker sits on the bottom edge of the step row */
+.track-marker { grid-row: 2; grid-column: 1 / -1; position: relative; align-self: end; height: 0; z-index: 2; pointer-events: none; }
+.track-marker i {
+  position: absolute; top: -5px; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%;
   left: calc((var(--pos) + 0.5) / var(--n) * 100%);
   background: var(--accent); box-shadow: 0 0 0 3px var(--surface), 0 0 12px var(--accent);
   transition: left .6s cubic-bezier(.4, 1.6, .5, 1);
 }
-.turn-theirs .track-marker { background: var(--t-power); box-shadow: 0 0 0 3px var(--surface), 0 0 12px var(--t-power); }
-.turn-both .track-marker { background: var(--rail); box-shadow: 0 0 0 3px var(--surface), 0 0 10px var(--rail); }
+.turn-theirs .track-marker i { background: var(--t-power); box-shadow: 0 0 0 3px var(--surface), 0 0 12px var(--t-power); }
+.turn-both .track-marker i { background: var(--rail); box-shadow: 0 0 0 3px var(--surface), 0 0 10px var(--rail); }
+/* turn brackets */
+.track-turn {
+  --tc: var(--t-power);
+  grid-row: 3; position: relative; margin: 9px 4px 0; height: 7px; border: 2px solid color-mix(in srgb, var(--tc) 55%, transparent);
+  border-top: 0; border-radius: 0 0 7px 7px; opacity: .65;
+}
+.track-turn.mine { --tc: var(--accent); }
+.track-turn.done { opacity: .3; }
+.track-turn.now { opacity: 1; border-color: var(--tc); box-shadow: 0 4px 10px -4px var(--tc); }
+.turn-label {
+  position: absolute; left: 50%; top: 100%; transform: translate(-50%, -45%); padding: 0 6px; white-space: nowrap;
+  font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--tc);
+  background: var(--surface);
+}
+.track-turn.now .turn-label { color: var(--surface); background: var(--tc); border-radius: 4px; }
+.track { padding-bottom: 12px; }
 .hud-hint { font-size: 0.74rem; color: var(--muted); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px; }
 .hud-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 300px; }
 kbd { font: 700 0.7rem var(--f-body); padding: 1px 5px; border-radius: 4px; border: 1px solid currentColor; opacity: .7; margin-left: 4px; }
@@ -648,7 +666,7 @@ kbd { font: 700 0.7rem var(--f-body); padding: 1px 5px; border-radius: 4px; bord
 }
 @media (prefers-reduced-motion: reduce) {
   .turn-mine .turn-chip, .turn-dot { animation: none !important; }
-  .track-marker { transition: none; }
+  .track-marker i { transition: none; }
   .turn-splash { animation: splash-calm 1.6s linear forwards; }
   @keyframes splash-calm { 0%, 80% { opacity: 1; transform: translate(-50%, -50%); } 100% { opacity: 0; transform: translate(-50%, -50%); } }
 }
@@ -660,7 +678,7 @@ kbd { font: 700 0.7rem var(--f-body); padding: 1px 5px; border-radius: 4px; bord
     radial-gradient(ellipse at 50% 50%, #1b3a33, #112622 70%);
 }
 .side { display: flex; flex-direction: column; gap: 8px; }
-.side-row { display: grid; grid-template-columns: 150px auto minmax(0, 1fr) minmax(150px, 1fr) auto; gap: 8px; align-items: stretch; }
+.side-row { display: grid; grid-template-columns: 150px auto minmax(0, 1fr) minmax(230px, 1.5fr) auto; gap: 8px; align-items: stretch; }
 .side.opp .side-row { opacity: .97; }
 .zone, .hand, .lane {
   position: relative; border-radius: 10px; border: 1px dashed color-mix(in srgb, var(--rail) 18%, transparent);
@@ -670,9 +688,11 @@ kbd { font: 700 0.7rem var(--f-body); padding: 1px 5px; border-radius: 4px; bord
 .zone-cards, .hand-cards { display: flex; flex-wrap: wrap; gap: 6px; min-height: calc(var(--ch) + 2px); align-items: flex-start; }
 /* Star pool: bigger Stars. When there are many, they overlap instead of
    wrapping (each takes an equal share of the row, up to its full width). */
-.zone-pool { --sw: calc(var(--ch) * .56); --sh: calc(var(--ch) * .7); }
+.zone-pool { --sw: calc(var(--ch) * .64); --sh: calc(var(--ch) * .8); padding-top: 24px; }
 .zone-cards.stars {
-  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, calc(var(--sw) + 6px));
+  /* each column is as wide as a sideways (exhausted) Star, so they only
+     overlap when the pool is really full */
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, calc(var(--sh) + 4px));
   justify-content: start; align-items: center; gap: 0; min-height: calc(var(--sh) + 4px);
   /* room for the last Star's full width, so a crowded row never spills out */
   padding-right: calc(var(--sh) - 6px);
@@ -912,6 +932,7 @@ button.pile:hover { border-color: var(--line); }
   .hud-hint { display: none; }
   .hud { padding-block: 6px; }
   .track-group { display: none; }
+  .track { padding-bottom: 10px; }
 }
 
 /* ---------- narrow screens ---------- */
@@ -1069,3 +1090,73 @@ button.pile:hover { border-color: var(--line); }
   .sig-veil, .sig-card, .sig-text { animation: sig-calm 1.9s ease forwards; }
   @keyframes sig-calm { 0% { opacity: 0; } 15%, 80% { opacity: 1; } 100% { opacity: 0; } }
 }
+
+/* Star pool: quick pay */
+.pool-pay { position: absolute; top: 3px; right: 6px; display: flex; align-items: center; gap: 3px; font-size: 0.62rem; font-weight: 700; color: var(--muted); }
+.pool-pay .chip-btn { min-width: 22px; padding: 1px 6px; font-size: 0.72rem; }
+.pool-pay .chip-btn:disabled { opacity: .35; cursor: default; }
+.zone-pool .slot.is-star:hover .slot-inner > * { box-shadow: 0 0 0 3px var(--accent), 0 6px 14px rgba(0,0,0,.4); }
+
+/* ---- card sleeves ---- */
+.card-back.sleeved {
+  --sleeve: #e7b84b;
+  --sleeve-img: repeating-linear-gradient(45deg, #1d3a33 0 6px, #17302a 6px 12px);
+  background: var(--sleeve-img) center / cover no-repeat, #17302a;
+  border: 0.32em solid var(--sleeve); position: relative; overflow: hidden;
+  box-shadow: inset 0 0 0 0.09em rgba(0,0,0,.45);
+}
+.card-back.sb-gold { --sleeve: #e7b84b; }
+.card-back.sb-silver { --sleeve: #c9d3d6; }
+.card-back.sb-black { --sleeve: #0b0f0e; }
+.card-back.sb-white { --sleeve: #f4f1e8; }
+.card-back.sb-none { border-width: 0; }
+/* rainbow foil: the border is a gradient painted under the transparent border */
+.card-back.sb-rainbow {
+  border-color: transparent;
+  background:
+    var(--sleeve-img) center / cover no-repeat padding-box,
+    conic-gradient(from 30deg, #ff6b6b, #ffd93d, #6bff95, #4dd2ff, #b06bff, #ff6b6b) border-box;
+}
+/* a soft plastic shine, like a real sleeve */
+.sleeve-shine {
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(125deg, rgba(255,255,255,.28) 0%, rgba(255,255,255,0) 32%, rgba(255,255,255,0) 68%, rgba(255,255,255,.12) 100%);
+}
+.sleeve-label { position: relative; font-weight: 800; color: #fff; text-shadow: 0 1px 4px #000; }
+
+/* deck builder: sleeve picker */
+.sleeve-box { display: flex; gap: 12px; align-items: flex-start; padding: 8px; border: 1.5px dashed transparent; border-radius: 10px; }
+.sleeve-box.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.sleeve-preview .card.sz-m { font-size: 9.5px; }
+.sleeve-borders { gap: 4px; }
+.sb-chip { display: inline-flex; align-items: center; gap: 4px; }
+.sb-chip input[type=color] { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; min-height: 0; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: none; cursor: pointer; overflow: hidden; }
+.sb-chip input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
+.sb-chip input[type=color]::-webkit-color-swatch { border: 0; border-radius: 50%; }
+.sb-chip input[type=color]::-moz-color-swatch { border: 0; border-radius: 50%; }
+.sbc-gold { border-color: #e7b84b; } .sbc-silver { border-color: #c9d3d6; } .sbc-white { border-color: #f4f1e8; }
+.sbc-rainbow { border-image: linear-gradient(90deg, #ff6b6b, #ffd93d, #6bff95, #4dd2ff, #b06bff) 1; border-radius: 0; }
+
+/* dice roll for who goes first */
+.dice-fx { position: fixed; inset: 0; z-index: 74; display: grid; place-items: center; background: rgba(4,10,9,.55); cursor: pointer; animation: dice-in .25s ease-out; }
+@keyframes dice-in { from { opacity: 0; } }
+.dice-card { background: var(--surface); border: 2px solid var(--accent); border-radius: 16px; padding: 18px 26px 16px; text-align: center; box-shadow: 0 30px 80px rgba(0,0,0,.55); }
+.dice-row { display: flex; align-items: center; gap: 22px; margin: 10px 0 8px; }
+.dice-vs { font-family: var(--f-display); font-weight: 900; color: var(--muted); font-size: 1.3rem; }
+.die-slot { display: flex; flex-direction: column; align-items: center; gap: 8px; transition: transform .25s; }
+.die-slot.win { transform: scale(1.12); }
+.die-slot.win .die { box-shadow: 0 0 0 3px var(--accent), 0 0 24px 4px color-mix(in srgb, var(--accent) 60%, transparent); }
+.die {
+  width: 74px; height: 74px; border-radius: 14px; background: linear-gradient(145deg, #fffaf0, #e3d9c4); padding: 10px;
+  box-shadow: inset 0 -4px 0 rgba(0,0,0,.18), 0 8px 18px rgba(0,0,0,.4);
+}
+.die.rolling { animation: die-tumble .18s linear infinite; }
+@keyframes die-tumble { 0% { transform: rotate(0) translateY(0); } 50% { transform: rotate(14deg) translateY(-6px); } 100% { transform: rotate(-8deg) translateY(0); } }
+.die-face { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); width: 100%; height: 100%; place-items: center; }
+.die-face i { width: 11px; height: 11px; border-radius: 50%; }
+.die-face i.on { background: #1d2a26; }
+.die-name { font-weight: 800; }
+.die-slot.mine .die-name { color: var(--accent); }
+.dice-note { margin: 0; font-weight: 700; color: var(--muted); min-height: 1.4em; }
+.dice-note.done { color: var(--accent); font-family: var(--f-display); font-size: 1.4rem; font-weight: 900; text-transform: uppercase; }
+@media (prefers-reduced-motion: reduce) { .die.rolling { animation: none; } .dice-fx { animation: none; } }

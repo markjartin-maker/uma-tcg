@@ -68,6 +68,9 @@ window.Table = (() => {
     };
     Table._stop = stop;
     draw();
+    // Fresh match: show the dice roll for who goes first.
+    const s0 = S();
+    if (s0.dice && s0.phase === 'mulligan' && !Object.keys(s0.mulligan || {}).length) diceFx(s0);
   }
 
   const me = () => ui.viewAs;
@@ -295,6 +298,17 @@ window.Table = (() => {
       champ.length ? zoneEl(key('champion'), 'champion', 'Champion', pid) : null);
     const base = zoneEl(key('base'), 'base', 'Base', pid);
     const pool = zoneEl(key('pool'), 'pool', 'Star pool', pid, true);
+    // Quick pay: exhaust N ready Stars in one click (or click Stars one by one).
+    if (mine) {
+      const poolCards = zoneCards(key('pool'));
+      const ready = poolCards.filter(c => !c.exhausted && !c.mask).length;
+      const lbl = pool.querySelector('.zone-label');
+      if (lbl) { lbl.textContent = `Stars ${ready}/${poolCards.length}`; lbl.title = `${ready} of ${poolCards.length} Stars ready`; }
+      pool.append(h('div', { class: 'pool-pay', title: 'Exhaust this many ready Stars' },
+        h('span', null, 'Pay'),
+        [1, 2, 3, 4].map(n => h('button', { class: 'chip-btn', disabled: n > ready, on: { click: e => { e.stopPropagation(); act('payStars', n); } } }, n)),
+        h('button', { class: 'chip-btn', disabled: ready === poolCards.length, title: 'Ready all your Stars', on: { click: e => { e.stopPropagation(); act('readyStars'); } } }, '↺')));
+    }
 
     // Your hand fans out along the bottom of the screen, tilted like real cards.
     const n = hand.length;
@@ -325,8 +339,10 @@ window.Table = (() => {
       isOpp ? null : handEl);
   }
 
+  const sleeveOf = pid => (S().players[pid] || {}).sleeve || null;
+
   function pileEl(label, n, handlers, drop, pid, topCard) {
-    const face = topCard && !Game.isHidden(S(), topCard, me()) ? Cards.render(def(topCard), { size: 's', title: false }) : (n ? Cards.renderBack('s') : h('div', { class: 'pile-empty' }));
+    const face = topCard && !Game.isHidden(S(), topCard, me()) ? Cards.render(def(topCard), { size: 's', title: false }) : (n ? Cards.renderBack('s', '', sleeveOf(pid)) : h('div', { class: 'pile-empty' }));
     const on = {};
     if (handlers && handlers.click) on.click = handlers.click;
     if (handlers && handlers.context) on.contextmenu = e => { e.preventDefault(); handlers.context(); };
@@ -451,7 +467,7 @@ window.Table = (() => {
     const d = def(c);
     const kind = Game.zoneKind(c.zone);
     let face;
-    if (hidden) face = Cards.renderBack('s');
+    if (hidden) face = Cards.renderBack('s', '', sleeveOf(c.owner));
     else if (d.card_type === 'star') face = Cards.renderStar(d.types[0], 's');
     else {
       face = Cards.render(d, { size: 's' });
@@ -503,7 +519,7 @@ window.Table = (() => {
     },
       h('div', { class: 'slot-inner' }, face),
       c.dmg ? h('span', { class: 'dmg', title: 'Damage' }, c.dmg) : null,
-      c.tmp ? h('span', { class: 'tmp-might ' + (c.tmp > 0 ? 'up' : 'down'), title: 'Temporary might (until the next Ramp)' }, (c.tmp > 0 ? '+' : '') + c.tmp) : null,
+      c.tmp ? h('span', { class: 'tmp-might ' + (c.tmp > 0 ? 'up' : 'down'), title: 'Temporary might (stays until you change or clear it)' }, (c.tmp > 0 ? '+' : '') + c.tmp) : null,
       c.faceDown && !hidden ? h('span', { class: 'tag' }, c.paid ? `Face-down · paid ${c.paid.energy}${c.paid.power ? '+' + c.paid.power + 'P' : ''}` : 'Face-down') : null,
       c.mask && c.owner === me() ? h('span', { class: 'tag reserved', title: 'Paid for a face-down card. Your opponent sees this when it is revealed.' }, c.mask.recycle ? 'Recycles on reveal' : 'Hidden cost') : null,
       c.conjured && !hidden ? h('span', { class: 'tag conj' }, 'Conjured') : null,
@@ -654,7 +670,7 @@ window.Table = (() => {
       const base = Cards.hasMight(d) ? Number(d.might) : 0;
       items.push({ counter: 'Might', value: `${base + (c.might || 0)}${c.might ? ` (${c.might > 0 ? '+' : ''}${c.might})` : ''}`,
         minus: () => actKeep('might', c.iid, -1), plus: () => actKeep('might', c.iid, 1) });
-      items.push({ counter: 'Temp might', value: c.tmp ? (c.tmp > 0 ? '+' : '') + c.tmp : '0', hint: 'Until the next Ramp',
+      items.push({ counter: 'Temp might', value: c.tmp ? (c.tmp > 0 ? '+' : '') + c.tmp : '0', hint: 'Shown as a badge',
         minus: () => actKeep('tempMight', c.iid, -1), plus: () => actKeep('tempMight', c.iid, 1) });
     }
     items.push({ counter: 'Damage', value: String(c.dmg || 0), minus: () => actKeep('damage', c.iid, -1), plus: () => actKeep('damage', c.iid, 1) });
@@ -983,7 +999,7 @@ window.Table = (() => {
     const my = me();
     const op = Game.opp(s, my);
     const info = turnInfo();
-    const { segs, index } = Game.phaseTrack(s);
+    const { segs, index, turns } = Game.phaseTrack(s);
     const startPos = ui.lastPos !== undefined ? ui.lastPos : index;
 
     const player = (pid, side) => {
@@ -1003,12 +1019,19 @@ window.Table = (() => {
       else groups.push({ name: sg.group, n: 1 });
     });
     const track = h('div', { class: 'track', style: { '--n': segs.length, '--pos': startPos }, 'aria-hidden': 'true' },
-      groups.map(g => h('span', { class: 'track-group', style: { gridColumn: `span ${g.n}` } }, g.name)),
+      (() => { let col = 1; return groups.map(g => { const el = h('span', { class: 'track-group', style: { gridColumn: `${col} / span ${g.n}` } }, g.name); col += g.n; return el; }); })(),
       segs.map((sg, i) => h('span', {
+        style: { gridColumn: String(i + 1) },
         class: ['track-seg', sg.who ? (sg.who === my ? 'who-mine' : 'who-theirs') : 'who-both', i < index ? 'done' : '', i === index ? 'now' : ''].filter(Boolean).join(' '),
         title: `${sg.group} · ${sg.label}${sg.who ? ' · ' + Game.nameOf(s, sg.who) : ''}`,
       }, sg.label)),
-      h('span', { class: 'track-marker' }));
+      // Turn brackets under the track: one per Ramp, owned by its first player.
+      (turns || []).map(t => h('span', {
+        class: ['track-turn', t.who === my ? 'mine' : 'theirs', index >= t.start && index <= t.end && s.phase !== 'mulligan' ? 'now' : '', index > t.end ? 'done' : ''].filter(Boolean).join(' '),
+        style: { gridColumn: `${t.start + 1} / ${t.end + 2}` },
+        title: `Turn ${t.n}: ${Game.nameOf(s, t.who)} (until the next Units step)`,
+      }, h('span', { class: 'turn-label' }, `Turn ${t.n} · ${t.who === my ? 'You' : Game.nameOf(s, t.who)}`))),
+      h('span', { class: 'track-marker' }, h('i')));
 
     // the main action(s) for this moment
     const actions = [];
@@ -1059,6 +1082,47 @@ window.Table = (() => {
         h('p', { class: 'hud-hint', title: info.sub }, info.sub)),
       player(my, 'me'),
       h('div', { class: 'hud-actions' }, actions));
+  }
+
+  // Dice roll for who goes first: both dice tumble, ties roll again.
+  function diceFx(s) {
+    const PIPS = { 1: [5], 2: [1, 9], 3: [1, 5, 9], 4: [1, 3, 7, 9], 5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9] };
+    const face = n => h('div', { class: 'die-face' }, Array.from({ length: 9 }, (_, i) => h('i', { class: PIPS[n].includes(i + 1) ? 'on' : '' })));
+    const [p0, p1] = s.order;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const dieBox = pid => {
+      const box = h('div', { class: 'die-slot' + (pid === me() ? ' mine' : '') },
+        h('div', { class: 'die' }, face(1)),
+        h('span', { class: 'die-name' }, pid === me() ? 'You' : Game.nameOf(s, pid)));
+      return box;
+    };
+    const a = dieBox(p0), b = dieBox(p1);
+    const note = h('p', { class: 'dice-note' }, 'Rolling for who goes first…');
+    const el = h('div', { class: 'dice-fx', role: 'status', on: { click: () => el.remove() } },
+      h('div', { class: 'dice-card' }, h('p', { class: 'eyebrow' }, 'Who goes first?'), h('div', { class: 'dice-row' }, a, h('span', { class: 'dice-vs' }, 'vs'), b), note));
+    document.body.append(el);
+    const setDie = (box, n, rolling) => {
+      const d = box.querySelector('.die');
+      d.replaceChildren(face(n));
+      d.classList.toggle('rolling', rolling);
+    };
+    const rolls = s.dice.rolls;
+    let t = 0;
+    const step = reduce ? 0 : 900;
+    rolls.forEach(([x, y], i) => {
+      // tumble: flicker random faces, then land
+      if (!reduce) for (let k = 0; k < 8; k++) setTimeout(() => {
+        setDie(a, 1 + Math.floor(Math.random() * 6), true); setDie(b, 1 + Math.floor(Math.random() * 6), true);
+      }, t + k * 90);
+      setTimeout(() => {
+        setDie(a, x, false); setDie(b, y, false);
+        a.classList.toggle('win', x > y); b.classList.toggle('win', y > x);
+        note.textContent = x === y ? `Tie (${x})! Rolling again…` : `${Game.nameOf(s, x > y ? p0 : p1)} goes first!`;
+        note.classList.toggle('done', x !== y);
+      }, t + step);
+      t += step + (i < rolls.length - 1 ? 700 : 0);
+    });
+    setTimeout(() => el.remove(), t + 2400);
   }
 
   // A Signature card was played: a full-screen moment for both players.

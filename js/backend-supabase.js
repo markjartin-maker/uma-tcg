@@ -21,6 +21,9 @@ window.SupabaseBackend = class SupabaseBackend {
       if (/signature_of|champion_id/.test(error.message || '')) {
         throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/08-champion-signature.sql, then try again.');
       }
+      if (/sleeve/.test(error.message || '')) {
+        throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/10-sleeves.sql, then try again.');
+      }
       if (/is_token|type_count/.test(error.message || '')) {
         throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/09-tokens.sql, then try again.');
       }
@@ -115,14 +118,17 @@ window.SupabaseBackend = class SupabaseBackend {
     // Only sent when used, so older databases (before 08) keep working.
     if (card.signature_of !== undefined) row.signature_of = card.signature_of || null;
     if (card.is_token !== undefined) row.is_token = !!card.is_token;
-    if (imageFile) {
-      const ext = (imageFile.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const path = `${this.me.id}/${U.uid()}.${ext}`;
-      this.check(await this.sb.storage.from('card-art').upload(path, imageFile, { contentType: imageFile.type }));
-      row.image_url = this.sb.storage.from('card-art').getPublicUrl(path).data.publicUrl;
-    }
+    if (imageFile) row.image_url = await this.uploadImage(imageFile);
     if (card.id) return this.check(await this.sb.from('cards').update(row).eq('id', card.id).select().single());
     return this.check(await this.sb.from('cards').insert(row).select().single());
+  }
+
+  // Upload an image (card art, sleeves) to your folder in the card-art bucket.
+  async uploadImage(file) {
+    const ext = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const path = `${this.me.id}/${U.uid()}.${ext}`;
+    this.check(await this.sb.storage.from('card-art').upload(path, file, { contentType: file.type }));
+    return this.sb.storage.from('card-art').getPublicUrl(path).data.publicUrl;
   }
 
   // Admin: add the sample cards + two sample decks to the real pool.
@@ -178,6 +184,7 @@ window.SupabaseBackend = class SupabaseBackend {
   async saveDeck(deck) {
     const row = { name: deck.name, leader_id: deck.leader_id || null, cards: deck.cards, stars: deck.stars, updated_at: new Date().toISOString() };
     if (deck.champion_id !== undefined) row.champion_id = deck.champion_id || null;
+    if (deck.sleeve !== undefined) row.sleeve = deck.sleeve || null;
     if (deck.id) return this.check(await this.sb.from('decks').update(row).eq('id', deck.id).select().single());
     return this.check(await this.sb.from('decks').insert(row).select().single());
   }

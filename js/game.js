@@ -23,7 +23,7 @@ window.Game = (() => {
       mulligan: {},      // pid → 'keep' | 'redraw'
       step: 0,
       ramp: 1,          // which Ramp of this round (1..RAMPS_PER_RACE)
-      rampFirst: Math.random() < 0.5 ? 0 : 1,
+      rampFirst: 0, // set by the dice roll below
       round: 1,
       cards: {},
       zones: { 'lane:mini0': [], 'lane:mini1': [], 'lane:race': [], 'shared:chain': [], 'env:mini0': [], 'env:mini1': [] },
@@ -38,7 +38,7 @@ window.Game = (() => {
       seq: 0,
     };
     for (const p of players) {
-      s.players[p.id] = { name: p.name, fans: 0, revealHand: false };
+      s.players[p.id] = { name: p.name, fans: 0, revealHand: false, sleeve: p.deck && p.deck.sleeve ? p.deck.sleeve : null };
       for (const z of PLAYER_ZONES) s.zones[`${p.id}:${z}`] = [];
       const d = p.deck;
       if (d.leader_id && defs[d.leader_id]) addInstance(s, d.leader_id, p.id, `${p.id}:leader`);
@@ -59,8 +59,18 @@ window.Game = (() => {
       stars.forEach(iid => (s.cards[iid].zone = `${p.id}:stars`));
       for (let i = 0; i < G().STARTING_HAND; i++) drawOne(s, p.id);
     }
-    const first = s.players[s.order[s.rampFirst]].name;
-    log(s, null, `Match started. ${first} will play units first. Both players: keep your hand or mulligan.`);
+    // Dice roll for who goes first (ties roll again).
+    const d6 = () => 1 + (crypto.getRandomValues(new Uint32Array(1))[0] % 6);
+    s.dice = { rolls: [] };
+    let a, b;
+    do { a = d6(); b = d6(); s.dice.rolls.push([a, b]); } while (a === b && s.dice.rolls.length < 20);
+    if (a === b) b = a === 6 ? 5 : a + 1; // (practically never)
+    s.rampFirst = a > b ? 0 : 1;
+    s.dice.first = s.order[s.rampFirst];
+    const nm = i => s.players[s.order[i]].name;
+    const ties = s.dice.rolls.length - 1;
+    log(s, null, `Dice roll: ${nm(0)} rolled ${a}, ${nm(1)} rolled ${b}${ties ? ` (after ${ties} tie${ties > 1 ? 's' : ''})` : ''}. ${nm(s.rampFirst)} plays units first.`);
+    log(s, null, 'Both players: keep your hand or mulligan.');
     return s;
   }
 
@@ -326,7 +336,7 @@ window.Game = (() => {
     const lanes = contestedLanes(s);
     if (!lanes.length) {
       log(s, null, 'No mini lane is contested, so the fight check is skipped.');
-      leaveCheckpoint(s);
+      leaveCheckpoint(s, true);
       return;
     }
     s.step = 3;
@@ -334,7 +344,24 @@ window.Game = (() => {
     log(s, null, `Fight check: ${lanes.map(l => LANE_LABEL[l]).join(' and ')} ${lanes.length > 1 ? 'are' : 'is'} contested. Both players choose Fight or Refuse (secretly).`);
   }
 
-  function leaveCheckpoint(s) {
+  // Holding a mini lane (only your cards there) is worth MINI_LANE_FANS,
+  // scored automatically whenever a fight check ends.
+  function awardHolds(s) {
+    if (G().AUTO_HOLD_FANS === false) return;
+    const pts = G().MINI_LANE_FANS ?? 50;
+    for (const l of ['mini0', 'mini1']) {
+      const owners = new Set((s.zones['lane:' + l] || []).map(i => s.cards[i]).filter(c => c && !c.attachedTo).map(c => c.owner));
+      if (owners.size !== 1) continue;
+      const pid = [...owners][0];
+      s.players[pid].fans += pts;
+      log(s, null, `${nameOf(s, pid)} holds ${LANE_LABEL[l]}: +${pts} fans.`);
+    }
+    checkWinner(s);
+  }
+
+  // award = true when leaving an actual fight check (score held lanes).
+  function leaveCheckpoint(s, award = false) {
+    if (award) awardHolds(s);
     s.fight = null;
     s.miniFight = false;
     if (s.ramp >= RAMPS()) { beginRace(s); return; }
@@ -372,7 +399,6 @@ window.Game = (() => {
     for (const pid of s.order) {
       for (const c of Object.values(s.cards)) {
         if (c.owner === pid && c.exhausted && BOARD.includes(zoneKind(c.zone))) c.exhausted = false;
-        if (c.owner === pid && c.tmp) c.tmp = 0; // temporary might lasts until the next Ramp
         if (c.owner === pid && c.mask) {
           // Stars spent on a still-hidden card: energy ones ready as normal,
           // power ones stay reserved (they get recycled on reveal).
@@ -407,7 +433,7 @@ window.Game = (() => {
       default: {
         const last = s.ramp >= RAMPS();
         return { title: last ? 'End of Ramp · Fight?' : `After Ramp ${s.ramp} · Fight?`, short: 'Fight?', who: null,
-          hint: `A mini lane is contested. Each player secretly chooses Fight or Refuse. Refusing costs ${G().REFUSE_FIGHT_FANS ?? 50} fans. Then ${last ? 'the Race begins' : `Ramp ${s.ramp + 1} begins`}.` };
+          hint: `A mini lane is contested. Each player secretly chooses Fight or Refuse (refusing costs ${G().REFUSE_FIGHT_FANS ?? 50} fans). On Continue, whoever holds a mini lane alone gets +${G().MINI_LANE_FANS ?? 50}, then ${last ? 'the Race begins' : `Ramp ${s.ramp + 1} begins`}.` };
       }
     }
   }
@@ -419,18 +445,23 @@ window.Game = (() => {
     if (s.phase === 'mulligan') {
       segs.push({ group: 'Start', label: 'Mulligan', who: null, key: 'mull' });
     }
+    // A "turn" belongs to the player who plays units first in a Ramp, and
+    // lasts until the next Units step (so the last one includes the Race).
+    const turns = [];
     for (let r = 1; r <= RAMPS(); r++) {
       const firstIdx = ((s.phase === 'mulligan' ? s.rampFirst : s.rampFirst + (r - s.ramp)) % 2 + 2) % 2;
       const first = s.order[firstIdx], second = s.order[1 - firstIdx];
+      turns.push({ start: segs.length, who: first, n: (s.round - 1) * RAMPS() + r });
       segs.push({ group: `Ramp ${r}`, label: 'Units', who: first, key: `r${r}s0` });
       segs.push({ group: `Ramp ${r}`, label: 'Units & tricks', who: second, key: `r${r}s1` });
       segs.push({ group: `Ramp ${r}`, label: 'Tricks', who: first, key: `r${r}s2` });
       if (isCheckpoint(s, r)) segs.push({ group: r === RAMPS() ? 'End' : 'Fight', label: 'Fight?', who: null, key: `r${r}s3` });
     }
     segs.push({ group: 'Race', label: 'Race', who: null, key: 'race' });
+    turns.forEach((t, i) => { t.end = i < turns.length - 1 ? turns[i + 1].start - 1 : segs.length - 1; });
     const key = s.phase === 'mulligan' ? 'mull' : s.phase === 'race' ? 'race' : `r${s.ramp}s${Math.min(s.step, 3)}`;
     index = Math.max(0, segs.findIndex(x => x.key === key));
-    return { segs, index };
+    return { segs, index, turns };
   }
 
   // ---------- actions ----------
@@ -503,6 +534,20 @@ window.Game = (() => {
       return `channeled ${got} Star${got > 1 ? 's' : ''}`;
     },
 
+    // Exhaust n of your ready Stars at once (for paying energy).
+    payStars(s, me, n) {
+      const ready = (s.zones[`${me}:pool`] || []).map(i => s.cards[i]).filter(c => !c.exhausted && !c.mask);
+      if (ready.length < n) throw new Error(`You only have ${ready.length} ready Star${ready.length === 1 ? '' : 's'}.`);
+      for (const c of ready.slice(0, n)) c.exhausted = true;
+      return `exhausted ${n} Star${n > 1 ? 's' : ''}`;
+    },
+
+    readyStars(s, me) {
+      let n = 0;
+      for (const i of s.zones[`${me}:pool`] || []) { const c = s.cards[i]; if (c.exhausted && !c.mask) { c.exhausted = false; n++; } }
+      return `readied ${n} Star${n === 1 ? '' : 's'}`;
+    },
+
     recycle(s, me, iid) {
       if (s.cards[iid].mask) throw new Error('This Star paid for a face-down card. It stays used until that card is revealed.');
       const nm = cardName(s, iid);
@@ -533,7 +578,7 @@ window.Game = (() => {
     tempMight(s, me, iid, d) {
       const c = s.cards[iid];
       c.tmp = (c.tmp || 0) + d;
-      return `${d > 0 ? 'gave +' + d : 'gave ' + d} temporary might to ${cardName(s, iid)} (${c.tmp >= 0 ? '+' : ''}${c.tmp} until the next Ramp)`;
+      return `${d > 0 ? 'gave +' + d : 'gave ' + d} temporary might to ${cardName(s, iid)} (now ${c.tmp >= 0 ? '+' : ''}${c.tmp})`;
     },
 
     banish(s, me, iid) {
@@ -808,7 +853,7 @@ window.Game = (() => {
       if (s.step !== 3) throw new Error('Nothing to continue from.');
       if (s.fight && !s.fight.result) throw new Error('Both players choose Fight or Refuse first.');
       log(s, me, s.ramp >= RAMPS() ? 'began the Race.' : `moved on to Ramp ${s.ramp + 1}.`);
-      leaveCheckpoint(s);
+      leaveCheckpoint(s, true);
       return null;
     },
 
@@ -835,7 +880,6 @@ window.Game = (() => {
           place(s, iid, `${c.owner}:base`);
         }
       }
-      for (const c of Object.values(s.cards)) if (c.tmp) c.tmp = 0;
       s.phase = 'ramp';
       s.step = 0;
       s.ramp = 1;

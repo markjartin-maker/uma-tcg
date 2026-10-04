@@ -61,6 +61,7 @@ window.DemoBackend = class DemoBackend {
   // ----- decks -----
   async listDecks() { return this.decks.map(d => U.clone(d)); }
   async getDeck(id) { const d = this.decks.find(x => x.id === id); return d ? U.clone(d) : null; }
+  async uploadImage(file) { return URL.createObjectURL(file); }
   async saveDeck(deck) {
     const row = { ...U.clone(deck), updated_at: new Date().toISOString() };
     if (row.id) {

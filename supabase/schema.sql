@@ -138,6 +138,7 @@ create table if not exists public.decks (
   name text not null check (char_length(name) between 1 and 40),
   leader_id uuid references public.cards on delete set null,
   champion_id uuid references public.cards on delete set null, -- the deck's Champion Uma
+  sleeve jsonb, -- card sleeve: {"image_url": "...", "border": "gold"}
   cards jsonb not null default '{}',
   stars jsonb not null default '{}',
   updated_at timestamptz not null default now()
@@ -148,6 +149,7 @@ alter table public.decks enable row level security;
 alter table public.cards add column if not exists signature_of uuid references public.cards on delete set null;
 alter table public.decks add column if not exists champion_id uuid references public.cards on delete set null;
 alter table public.cards add column if not exists is_token boolean not null default false;
+alter table public.decks add column if not exists sleeve jsonb;
 alter table public.cards drop constraint if exists type_count;
 alter table public.cards add constraint type_count check (
   (card_type = 'superhorse' and cardinality(types) = 2)
