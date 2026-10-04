@@ -183,7 +183,13 @@ window.App = (() => {
     renderAuth();
   }
 
+  // Custom keywords (Keyword maker) are shared by everyone: load them once.
+  async function loadKeywords() {
+    try { Cards.setCustomKeywords(await app.backend.listKeywords()); } catch (e) { console.warn(e); }
+  }
+
   function afterLogin() {
+    loadKeywords();
     // Challenges that were already accepted before this page loaded are old:
     // don't jump into those matches (they're listed under "Your matches").
     firstChallengeList = true;
@@ -398,7 +404,7 @@ window.App = (() => {
     }) : [h('p', { class: 'muted' }, 'No matches yet.')]));
   }
 
-  return { start, go, get backend() { return app.backend; }, get me() { return app.me; }, who: id => who(id), refreshProfiles: async () => { profiles = await app.backend.listProfiles(); } };
+  return { start, go, loadKeywords, get backend() { return app.backend; }, get me() { return app.me; }, who: id => who(id), refreshProfiles: async () => { profiles = await app.backend.listProfiles(); } };
 })();
 
 document.addEventListener('DOMContentLoaded', () => App.start());

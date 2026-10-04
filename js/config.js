@@ -38,6 +38,14 @@ window.CONFIG = {
     // Score MINI_LANE_FANS automatically for each mini lane a player holds
     // (only their cards there) whenever a fight check ends.
     AUTO_HOLD_FANS: true,
+    // Holds aren't scored at the fight check right before the Race, or when
+    // both players agreed to fight. Set true to score before the Race too.
+    HOLD_FANS_BEFORE_RACE: false,
+    // A hold that would reach FANS_TO_WIN starts a showdown on the opponent's
+    // next turn instead of winning right away.
+    SHOWDOWN: true,
+    // Floating Energy / Power empties at the start of each Ramp.
+    FLOAT_CLEARS_EACH_RAMP: true,
     RACE_FANS: 150,       // only your units left at end of Race
     // After a Race ends, units still in the Lane go back to their owner's base.
     // Set to false to leave them in the Lane and move them by hand.

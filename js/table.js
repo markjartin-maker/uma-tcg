@@ -25,6 +25,8 @@ window.Table = (() => {
       longPress: null,
       seenChain: new Set((m.state.chain || []).map(x => x.n)),
       suppressClick: false,
+      sel: new Set(), // multi-select
+      floatPos: (() => { try { const p = JSON.parse(localStorage.getItem('uma-float-pos')); return p && p.x < window.innerWidth - 40 && p.y < window.innerHeight - 40 ? p : null; } catch (e) { return null; } })(),
     };
     const unwatch = App.backend.watchMatch(matchId, row => {
       if (!ui || ui.id !== matchId) return;
@@ -36,7 +38,7 @@ window.Table = (() => {
     const isTyping = t => t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable);
     const onKey = e => {
       if (!ui) return;
-      if (e.key === 'Escape') { closeMenu(); if (ui.pick) { ui.pick = null; draw(); } return; }
+      if (e.key === 'Escape') { closeMenu(); if (ui.pick) { ui.pick = null; draw(); } else clearSel(); return; }
       if ((e.code === 'Space' || e.key === ' ') && !isTyping(e.target) && !document.querySelector('.modal-backdrop')) {
         e.preventDefault();
         if (!e.repeat) passWithSpace();
@@ -163,7 +165,8 @@ window.Table = (() => {
       log: (ui.el.querySelector('.log-list') || {}).scrollTop || 0 };
     board.addEventListener('contextmenu', e => e.preventDefault());
     const hud = hudEl();
-    const scroller = h('div', { class: 'board-scroll' }, board, s.phase === 'mulligan' ? mulliganEl() : null);
+    const scroller = h('div', { class: 'board-scroll' }, board, s.phase === 'mulligan' ? mulliganEl() : null, selBarEl(), floatEl());
+    bindBoxSelect(scroller);
     const side = sidebarEl();
     scroller.addEventListener('scroll', () => requestAnimationFrame(drawArrows), { passive: true });
     side.addEventListener('scroll', () => requestAnimationFrame(drawArrows), { passive: true });
@@ -203,6 +206,9 @@ window.Table = (() => {
     const turnKey = `${s.round}-${s.ramp}-${s.step}-${s.phase}`;
     const callKey = chainTop && s.priority === me() ? `${chainTop}-${me()}` : '';
     for (const it of s.chain || []) ui.seenChain.add(it.n);
+    const sdKey = s.showdown && s.showdown.active ? `${s.showdown.pid}-${s.showdown.made}` : '';
+    if (sdKey && ui.sdKey !== undefined && ui.sdKey !== sdKey) showdownFx(s);
+    ui.sdKey = sdKey;
     const sig = freshChain.filter(it => it.kind !== 'ability' && s.cards[it.iid] && Cards.isSignature(def(s.cards[it.iid]))).pop();
     if (sig) signatureFx(s.cards[sig.iid], sig.by);
     else if (!s.winner && ((ui.turnKey && ui.turnKey !== turnKey) || (callKey && ui.callKey !== callKey && ui.turnKey))) splash();
@@ -324,7 +330,7 @@ window.Table = (() => {
       return el;
     });
     const handEl = h('div', {
-      class: 'hand' + (mine ? ' mine fan' : ''), dataset: mine ? { drop: 'hand', owner: pid } : {},
+      class: 'hand' + (mine ? ' mine fan' : ''), dataset: mine ? { drop: 'hand', owner: pid, overlap: n > 9 ? '-0.5' : n > 6 ? '-0.38' : '-0.22' } : {},
       style: mine ? { '--overlap': n > 9 ? '-0.5' : n > 6 ? '-0.38' : '-0.22' } : null,
     },
       h('span', { class: 'zone-label' }, `Hand · ${hand.length}`),
@@ -389,7 +395,8 @@ window.Table = (() => {
           bindDrop(box, null);
           return box;
         });
-        const el = h('div', { class: 'lane lane-' + l + (Object.keys(tint).length ? ' has-env' : ''), dataset: { drop: l }, style: tint },
+        const sd = s.showdown && s.showdown.active && (s.showdown.lane === l || l === 'race');
+        const el = h('div', { class: 'lane lane-' + l + (Object.keys(tint).length ? ' has-env' : '') + (sd ? ' showdown' : ''), dataset: { drop: l }, style: tint },
           h('div', { class: 'lane-head' }, h('span', { class: 'lane-name' }, Game.LANE_LABEL[l]),
             h('span', { class: 'lane-might', title: 'Total might (face-up units)' }, `${opMight} vs ${myMight}`)),
           envEls,
@@ -488,7 +495,7 @@ window.Table = (() => {
     const shownEx = animate ? prevEx : nowEx;
     const slot = h('div', {
       class: ['slot', shownEx ? 'ex' : '', c.faceDown ? 'fd' : '', newPing ? 'pinged' : '',
-        ui.pick && ui.pick.iid === c.iid ? 'picking-src' : '', d.card_type === 'star' ? 'is-star' : ''].filter(Boolean).join(' '),
+        ui.pick && ui.pick.iid === c.iid ? 'picking-src' : '', d.card_type === 'star' ? 'is-star' : '', ui.sel.has(c.iid) ? 'selected' : ''].filter(Boolean).join(' '),
       dataset: { iid: c.iid },
       draggable: canDrag ? 'true' : null,
       tabindex: '0',
@@ -498,6 +505,7 @@ window.Table = (() => {
         click: e => {
           e.stopPropagation();
           if (ui.suppressClick) { ui.suppressClick = false; return; }
+          if (e.shiftKey || e.ctrlKey || e.metaKey) { toggleSel(c); return; }
           primaryAction(c, e.currentTarget);
         },
         contextmenu: e => { e.preventDefault(); e.stopPropagation(); secondaryAction(c, e.currentTarget); },
@@ -552,20 +560,160 @@ window.Table = (() => {
       const c = S().cards[iid];
       if (!c) return;
       const dest = el.dataset.drop;
-      if (dest === 'pool' && def(c).card_type !== 'star') return U.toast('Only Stars go in the Star pool.', 'error');
-      if (dest !== 'pool' && def(c).card_type === 'star' && dest !== 'trash') return U.toast('Stars stay in the Star pool. Use Recycle to send one back.', 'error');
-      if (el.dataset.owner && el.dataset.owner !== c.owner && ['base', 'hand', 'trash', 'deck-top'].includes(dest)) {
-        return U.toast("Cards go to their owner's zones. Use Give to hand a card over.", 'error');
+      // Dragging one of several selected cards moves them all.
+      if (ui.sel.has(iid) && ui.sel.size > 1) {
+        const plans = selCards().map(x => dropPlan(x, dest, el.dataset.owner)).filter(p => Array.isArray(p));
+        if (!plans.length) return U.toast("Those cards can't go there.", 'error');
+        act('batch', plans);
+        return;
       }
-      if (c.zone === (Game.LANES.includes(dest) ? 'lane:' + dest : `${c.owner}:${dest}`)) return;
-      // From your hand onto the table = playing it (goes on the chain).
-      const fromHand = ['hand', 'champion'].includes(Game.zoneKind(c.zone)) && c.owner === me();
-      const isEnv = Cards.isEnvironment(def(c));
-      if (Game.ENV_SLOTS.includes(dest) && !isEnv) return U.toast('Only Environment cards go in the environment slot.', 'error');
-      // An environment dropped on a mini lane goes into that lane's environment slot.
-      if (isEnv && fromHand && (dest === 'mini0' || dest === 'mini1')) act('play', iid, 'env:' + dest);
-      else if (fromHand && (Game.ENV_SLOTS.includes(dest) || (Game.BOARD.includes(dest) && dest !== 'pool'))) act('play', iid, dest);
-      else act('move', iid, dest);
+      const plan = dropPlan(c, dest, el.dataset.owner);
+      if (typeof plan === 'string') return U.toast(plan, 'error');
+      if (plan) act(...plan);
+    });
+  }
+
+  // What dropping card c on a zone does: an action [name, ...args], an error
+  // message (string), or null for nothing.
+  function dropPlan(c, dest, zoneOwner) {
+    const iid = c.iid;
+    if (dest === 'pool' && def(c).card_type !== 'star') return 'Only Stars go in the Star pool.';
+    if (dest !== 'pool' && def(c).card_type === 'star' && dest !== 'trash') return 'Stars stay in the Star pool. Use Recycle to send one back.';
+    if (zoneOwner && zoneOwner !== c.owner && ['base', 'hand', 'trash', 'deck-top', 'banish', 'champion'].includes(dest)) {
+      return "Cards go to their owner's zones. Use Give to hand a card over.";
+    }
+    if (c.zone === (Game.LANES.includes(dest) ? 'lane:' + dest : `${c.owner}:${dest}`)) return null;
+    // From your hand onto the table = playing it (goes on the chain).
+    const fromHand = ['hand', 'champion'].includes(Game.zoneKind(c.zone)) && c.owner === me();
+    const isEnv = Cards.isEnvironment(def(c));
+    if (Game.ENV_SLOTS.includes(dest) && !isEnv) return 'Only Environment cards go in the environment slot.';
+    // An environment dropped on a mini lane goes into that lane's environment slot.
+    if (isEnv && fromHand && (dest === 'mini0' || dest === 'mini1')) return ['play', iid, 'env:' + dest];
+    if (fromHand && (Game.ENV_SLOTS.includes(dest) || (Game.BOARD.includes(dest) && dest !== 'pool'))) return ['play', iid, dest];
+    return ['move', iid, dest];
+  }
+
+  // ---------- floating Energy / Power ----------
+  // What you can spend right now (ready Stars, Stars by type) plus a pool of
+  // floating Energy / Power that effects made and you haven't spent yet.
+  function floatEl() {
+    const s = S();
+    const my = me();
+    if (s.phase === 'mulligan') return null;
+    const pool = (s.zones[my + ':pool'] || []).map(i => s.cards[i]);
+    const ready = pool.filter(c => !c.exhausted && !c.mask).length;
+    const byType = {};
+    for (const c of Object.values(s.cards)) if (c.owner === my && def(c).card_type === 'star') byType[def(c).types[0]] = 0;
+    for (const c of pool) if (!c.mask) byType[def(c).types[0]] = (byType[def(c).types[0]] || 0) + 1;
+    const types = Object.keys(byType);
+    const fl = s.players[my].float || { energy: 0, power: {} };
+    const any = fl.energy || Object.values(fl.power || {}).some(Boolean);
+    const SHORT = { speed: 'Spd', stamina: 'Sta', power: 'Pow', guts: 'Gut', wit: 'Wit' };
+    const step = (kind, type, n, label, color) => h('span', { class: 'fl-item', style: color ? { '--c1': color } : null },
+      h('button', { class: 'fl-btn', 'aria-label': `${label} minus 1`, disabled: !n, on: { click: () => act('floatAdj', kind, type, -1) } }, '−'),
+      h('span', { class: 'fl-n' + (n ? ' on' : '') }, n), h('span', { class: 'fl-lbl' }, label),
+      h('button', { class: 'fl-btn', 'aria-label': `${label} plus 1`, on: { click: () => act('floatAdj', kind, type, 1) } }, '+'));
+    const handle = h('span', { class: 'fl-handle', title: 'Drag to move', 'aria-hidden': 'true' }, '⠿');
+    const box = h('div', { class: 'float-box' + (any ? ' has' : ''), role: 'group', 'aria-label': 'Energy and Power',
+      style: ui.floatPos ? { left: ui.floatPos.x + 'px', top: ui.floatPos.y + 'px', right: 'auto', bottom: 'auto' } : null },
+      h('div', { class: 'fl-row fl-avail', title: 'Have: ready Stars (Energy) and Stars in your pool by type (Power)' },
+        handle,
+        h('span', { class: 'fl-big' }, h('b', null, ready), ' Energy'),
+        types.map(t => h('span', { class: 'fl-type', style: { '--c1': `var(--t-${t})` } }, h('b', null, byType[t]), ' ', SHORT[t] || t))),
+      h('div', { class: 'fl-row', title: 'Floating: Energy / Power made by effects (e.g. a Carrot) and not spent yet. Empties at the start of each Ramp.' },
+        h('span', { class: 'fl-head' }, 'Float'),
+        step('energy', null, fl.energy || 0, 'E'),
+        types.map(t => step('power', t, (fl.power || {})[t] || 0, SHORT[t] || t, `var(--t-${t})`)),
+        any ? h('button', { class: 'fl-btn clear', title: 'Clear floating', on: { click: () => act('floatClear') } }, '✕') : null));
+    // Drag the box anywhere; the spot is remembered in this browser.
+    handle.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      const r = box.getBoundingClientRect();
+      const dx = e.clientX - r.left, dy = e.clientY - r.top;
+      const move = ev => {
+        const x = Math.max(0, Math.min(window.innerWidth - r.width, ev.clientX - dx));
+        const y = Math.max(0, Math.min(window.innerHeight - r.height, ev.clientY - dy));
+        Object.assign(box.style, { left: x + 'px', top: y + 'px', right: 'auto', bottom: 'auto' });
+        ui.floatPos = { x, y };
+      };
+      const up = () => {
+        document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+        try { localStorage.setItem('uma-float-pos', JSON.stringify(ui.floatPos)); } catch (err) { /* private mode */ }
+      };
+      document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+    });
+    return box;
+  }
+
+  // ---------- multi-select ----------
+  // Shift / Ctrl / Cmd + click toggles a card; drag a box on empty table space.
+  const selectable = c => c && !(Game.isHidden(S(), c, me()) && !(c.faceDown && c.owner === me())) && canMove(c);
+  function selCards() {
+    const s = S();
+    return [...ui.sel].map(i => s.cards[i]).filter(selectable);
+  }
+  function toggleSel(c) {
+    if (!selectable(c)) { U.toast("You can't select that card."); return; }
+    if (ui.sel.has(c.iid)) ui.sel.delete(c.iid); else ui.sel.add(c.iid);
+    draw();
+  }
+  function clearSel() { if (ui.sel.size) { ui.sel.clear(); draw(); } }
+
+  function selBarEl() {
+    const s = S();
+    const list = selCards();
+    for (const i of [...ui.sel]) if (!list.some(c => c.iid === i)) ui.sel.delete(i);
+    if (list.length < 1) return null;
+    const inPlay = list.filter(c => Game.BOARD.includes(Game.zoneKind(c.zone)));
+    const movable = list.filter(c => !['leader', 'pool', 'env'].includes(Game.zoneKind(c.zone)) && def(c).card_type !== 'star');
+    const run = (plans, label) => { if (!plans.length) { U.toast(`Nothing selected can ${label}.`, 'error'); return; } act('batch', plans); };
+    const lanes = s.phase === 'race' ? ['race'] : ['mini0', 'mini1'];
+    const b = (label, fn, cls = '') => h('button', { class: 'btn sm ' + cls, on: { click: e => { e.stopPropagation(); fn(); } } }, label);
+    return h('div', { class: 'sel-bar', role: 'toolbar', 'aria-label': 'Selected cards' },
+      h('strong', null, `${list.length} selected`),
+      inPlay.length ? b('Exhaust', () => run(inPlay.filter(c => !c.exhausted && !c.mask).map(c => ['toggleExhaust', c.iid]), 'be exhausted')) : null,
+      inPlay.length ? b('Ready', () => run(inPlay.filter(c => c.exhausted && !c.mask).map(c => ['toggleExhaust', c.iid]), 'be readied')) : null,
+      movable.length ? h('span', { class: 'sel-sep' }, 'Move to') : null,
+      movable.length ? [b('Base', () => run(movable.map(c => dropPlan(c, 'base')).filter(Array.isArray), 'go to base')),
+        ...lanes.map(l => b(Game.LANE_LABEL[l].replace(' lane', ''), () => run(movable.map(c => dropPlan(c, l)).filter(Array.isArray), 'go there')))] : null,
+      h('span', { class: 'sel-sep' }),
+      b('To hand', () => run(list.filter(c => Game.zoneKind(c.zone) !== 'hand' && c.owner === me() && def(c).card_type !== 'star').map(c => ['move', c.iid, 'hand']), 'go to your hand')),
+      b('Trash', () => run(list.map(c => def(c).card_type === 'star' ? null : ['trash', c.iid]).filter(Boolean), 'be trashed'), 'ghost'),
+      b('Banish', () => run(list.map(c => ['banish', c.iid]), 'be banished'), 'ghost danger'),
+      b('✕', clearSel, 'ghost'));
+  }
+
+  // Box select: drag across empty table space.
+  function bindBoxSelect(scroller) {
+    scroller.addEventListener('mousedown', e => {
+      if (e.button !== 0 || e.target.closest('.slot, button, .pile, .hand, input, select, .lane-env')) return;
+      const x0 = e.clientX, y0 = e.clientY;
+      let box = null;
+      const move = ev => {
+        const dx = ev.clientX - x0, dy = ev.clientY - y0;
+        if (!box && Math.hypot(dx, dy) < 6) return;
+        if (!box) { box = h('div', { class: 'sel-box' }); document.body.append(box); }
+        Object.assign(box.style, { left: Math.min(x0, ev.clientX) + 'px', top: Math.min(y0, ev.clientY) + 'px', width: Math.abs(dx) + 'px', height: Math.abs(dy) + 'px' });
+      };
+      const up = ev => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        if (!box) return;
+        const r = box.getBoundingClientRect();
+        box.remove();
+        if (!ev.shiftKey && !ev.ctrlKey && !ev.metaKey) ui.sel.clear();
+        const s = S();
+        for (const el of ui.el.querySelectorAll('.board .slot[data-iid]')) {
+          if (el.closest('.hand')) continue;
+          const q = el.getBoundingClientRect();
+          if (q.right < r.left || q.left > r.right || q.bottom < r.top || q.top > r.bottom) continue;
+          const c = s.cards[el.dataset.iid];
+          if (selectable(c)) ui.sel.add(c.iid);
+        }
+        draw();
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
     });
   }
 
@@ -896,6 +1044,8 @@ window.Table = (() => {
       return el;
     })) : h('p', { class: 'muted' }, 'Empty.');
     m = U.modal(`${Game.nameOf(s, pid)}'s ${zone === 'trash' ? 'trash' : 'banished cards'} · ${list.length}`, [
+      mine && zone === 'trash' && list.length ? h('div', { class: 'row end trash-tools' },
+        h('button', { class: 'btn', title: 'Shuffle your whole trash and put it on the bottom of your deck', on: { click: () => { m.close(); act('recycleTrash'); } } }, `Recycle all (${list.length}) to the bottom of your deck`)) : null,
       grid,
       list.length && mine ? h('p', { class: 'hint' }, 'Right-click a card (long-press on touch) for its options. Cards that can Conjure are marked ✦.') : null,
     ], { wide: true, onClose: () => { hidePeek(); closeMenu(); } });
@@ -961,7 +1111,22 @@ window.Table = (() => {
     if (!sc) return;
     const r = sc.getBoundingClientRect();
     document.documentElement.style.setProperty('--hand-x', (r.left + r.width / 2) + 'px');
-    document.documentElement.style.setProperty('--hand-max', Math.max(300, r.width - 40) + 'px');
+    document.documentElement.style.setProperty('--board-l', r.left + 'px');
+    document.documentElement.style.setProperty('--board-r', (window.innerWidth - r.right) + 'px');
+    // Keep the hand clear of the Energy box while it sits in its default corner.
+    const fb = !ui.floatPos && window.innerWidth > 1100 ? ui.el.querySelector('.float-box') : null;
+    const room = fb ? r.width - 2 * (fb.offsetWidth + 44) : r.width - 40;
+    const max = Math.max(300, room);
+    document.documentElement.style.setProperty('--hand-max', max + 'px');
+    // Squeeze the fanned hand so it never runs past that width.
+    const fan = ui.el.querySelector('.hand.fan');
+    const slots = fan ? fan.querySelectorAll('.hand-cards > .slot') : [];
+    if (fan && slots.length > 1) {
+      const base = Number(fan.dataset.overlap || -0.22);
+      const cw = slots[0].offsetWidth;
+      const fit = (max - cw) / ((slots.length - 1) * cw) - 1;
+      fan.style.setProperty('--overlap', String(Math.max(-0.8, Math.min(base, fit))));
+    }
   }
 
   // ---------- turn bar ----------
@@ -1042,6 +1207,15 @@ window.Table = (() => {
         myCall ? h('span', null, 'Resolve ', h('kbd', null, 'S')) : `Waiting for ${Game.nameOf(s, s.priority)}`));
     }
     const chainOpen = s.chain && s.chain.length;
+    if (s.showdown && s.showdown.active) {
+      const nm = Game.nameOf(s, s.showdown.pid);
+      actions.push(h('span', { class: 'fight-note' }, 'Showdown!'));
+      actions.push(h('button', { class: 'btn fight', on: { click: () => act('showdownResult', true) } }, `${s.showdown.pid === my ? 'I' : nm} won`));
+      actions.push(h('button', { class: 'btn', on: { click: () => act('showdownResult', false) } }, `${s.showdown.pid === my ? 'I' : nm} failed`));
+    } else if (s.showdown) {
+      actions.push(h('span', { class: 'fight-note calm', title: 'Starts at the beginning of the other player\'s next turn' },
+        `Showdown coming: ${s.showdown.pid === my ? 'you' : Game.nameOf(s, s.showdown.pid)}`));
+    }
     if (s.phase === 'mulligan') {
       const done = s.mulligan[my];
       if (done) actions.push(h('span', { class: 'fight-note calm' }, done === 'keep' ? 'Kept · ' : 'Mulliganed · ', `waiting for ${Game.nameOf(s, op)}`));
@@ -1123,6 +1297,16 @@ window.Table = (() => {
       t += step + (i < rolls.length - 1 ? 700 : 0);
     });
     setTimeout(() => el.remove(), t + 2400);
+  }
+
+  function showdownFx(s) {
+    document.querySelectorAll('.turn-splash, .sd-fx').forEach(e => e.remove());
+    const nm = s.showdown.pid === me() ? 'You go' : `${Game.nameOf(s, s.showdown.pid)} goes`;
+    const el = h('div', { class: 'sd-fx', 'aria-hidden': 'true' },
+      h('span', { class: 'sd-word' }, 'Showdown'),
+      h('span', { class: 'sd-sub' }, `${nm} for the win · ${Game.LANE_LABEL[s.showdown.lane] || ''}`));
+    document.body.append(el);
+    setTimeout(() => el.remove(), 2600);
   }
 
   // A Signature card was played: a full-screen moment for both players.

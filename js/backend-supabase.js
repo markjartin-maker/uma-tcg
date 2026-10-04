@@ -21,6 +21,9 @@ window.SupabaseBackend = class SupabaseBackend {
       if (/signature_of|champion_id/.test(error.message || '')) {
         throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/08-champion-signature.sql, then try again.');
       }
+      if (/cards_keywords_check/.test(error.message || '')) {
+        throw new Error('Your database needs the latest update to use custom keywords: in Supabase, open SQL Editor and run supabase/11-keywords.sql, then try again.');
+      }
       if (/sleeve/.test(error.message || '')) {
         throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/10-sleeves.sql, then try again.');
       }
@@ -122,6 +125,25 @@ window.SupabaseBackend = class SupabaseBackend {
     if (card.id) return this.check(await this.sb.from('cards').update(row).eq('id', card.id).select().single());
     return this.check(await this.sb.from('cards').insert(row).select().single());
   }
+
+  // ----- custom keywords (Keyword maker) -----
+  async listKeywords() {
+    const { data, error } = await this.sb.from('keywords').select('*').order('label');
+    if (error) { if (/keywords/.test(error.message || '')) return []; throw new Error(error.message); }
+    return data;
+  }
+  async saveKeyword(k) {
+    const row = { label: k.label.trim(), help: (k.help || '').trim(), color: k.color || 'effect' };
+    try {
+      if (k.id) return this.check(await this.sb.from('keywords').update(row).eq('id', k.id).select().single());
+      return this.check(await this.sb.from('keywords').insert({ ...row, slug: k.slug }).select().single());
+    } catch (e) {
+      if (/relation .*keywords|keywords.*does not exist|schema cache/i.test(e.message)) throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/11-keywords.sql, then try again.');
+      if (/duplicate|unique/i.test(e.message)) throw new Error('A keyword with that name already exists.');
+      throw e;
+    }
+  }
+  async deleteKeyword(id) { this.check(await this.sb.from('keywords').delete().eq('id', id)); }
 
   // Upload an image (card art, sleeves) to your folder in the card-art bucket.
   async uploadImage(file) {

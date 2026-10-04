@@ -102,6 +102,24 @@ window.Cards = (() => {
   const KEYWORD = Object.fromEntries(KEYWORDS.map(k => [k.id, k]));
   const norm = t => String(t).toLowerCase().replace(/[^a-z0-9]/g, '');
   const KEYWORD_BY_NAME = Object.fromEntries(KEYWORDS.flatMap(k => [[norm(k.id), k], [norm(k.label), k]]));
+  const KW_GROUPS = [
+    { id: 'timing', label: 'Timing (teal)', color: '#1c7657' },
+    { id: 'place', label: 'Placement (pink)', color: '#be2f68' },
+    { id: 'effect', label: 'Effect (green)', color: '#6b8a10' },
+  ];
+  const kwSlug = label => 'x-' + norm(label);
+  // Keywords made in the Keyword maker (loaded from the database).
+  // rows: { id, slug, label, help, color, owner }
+  function setCustomKeywords(rows) {
+    for (let i = KEYWORDS.length - 1; i >= 0; i--) if (KEYWORDS[i].custom) KEYWORDS.splice(i, 1);
+    for (const r of rows || []) {
+      if (!r || !r.slug || !r.label || KEYWORDS.some(k => k.id === r.slug)) continue;
+      const grp = KW_GROUPS.some(g => g.id === r.color) ? r.color : 'mine';
+      KEYWORDS.push({ id: r.slug, label: r.label, group: grp, color: grp === 'mine' ? r.color : null, help: r.help || '', custom: true, row: r });
+    }
+    for (const o of [KEYWORD, KEYWORD_BY_NAME]) for (const k of Object.keys(o)) delete o[k];
+    for (const k of KEYWORDS) { KEYWORD[k.id] = k; KEYWORD_BY_NAME[norm(k.id)] = k; KEYWORD_BY_NAME[norm(k.label)] = k; }
+  }
 
   // ---------- rich card text ----------
   // [Keyword]      → keyword badge        [Keyword>] → badge with an arrow end
@@ -142,6 +160,7 @@ window.Cards = (() => {
     const kw = KEYWORD_BY_NAME[norm(text)];
     return h('span', {
       class: `kwb kwb-${kw ? kw.group : 'custom'}${arrow ? ' arrow' : ''}`,
+      style: kw && kw.color ? { background: kw.color } : null,
       title: kw ? `${kw.label}: ${kw.help}` : 'Custom keyword',
     }, text.trim());
   }
@@ -299,7 +318,7 @@ window.Cards = (() => {
     const inline = inlineKeywords(def.effect);
     const extra = (def.keywords || []).filter(k => !inline.has(k));
     return h('div', { class: 'card-text' },
-      extra.length ? h('div', { class: 'kw-row' }, extra.map(k => keywordBadge(KEYWORD[k] ? KEYWORD[k].label : k, false))) : null,
+      extra.length ? h('div', { class: 'kw-row' }, extra.map(k => keywordBadge(KEYWORD[k] ? KEYWORD[k].label : String(k).replace(/^x-/, ''), false))) : null,
       def.effect ? h('p', null, richText(def.effect)) : null);
   }
 
@@ -385,9 +404,9 @@ window.Cards = (() => {
       const n = Number(c.conjure.count);
       if (!Number.isInteger(n) || n < 1 || n > 5) errs.push('Conjure count must be 1–5.');
     }
-    for (const k of c.keywords || []) if (!KEYWORD[k]) errs.push(`Unknown keyword "${k}".`);
+    for (const k of c.keywords || []) if (!KEYWORD[k] && !String(k).startsWith('x-')) errs.push(`Unknown keyword "${k}".`);
     return errs;
   }
 
-  return { SLEEVE_BORDERS, TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
+  return { KW_GROUPS, kwSlug, setCustomKeywords, SLEEVE_BORDERS, TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
 })();

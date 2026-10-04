@@ -90,10 +90,8 @@ create table if not exists public.cards (
   energy int not null default 0 check (energy between 0 and 15),
   power int not null default 0 check (power between 0 and 15),
   might int check (might between 0 and 99),
-  keywords text[] not null default '{}' check (
-    keywords <@ array['reaction', 'duel', 'uma-roar', 'in-the-shadows', 'friendship',
-                      'interference', 'conjure', 'showboat', 'exhaust', 'environment']
-  ),
+  -- built-in keyword ids, plus "x-…" ids from the Keyword maker
+  keywords text[] not null default '{}' constraint cards_keywords_check check (cardinality(keywords) <= 16),
   effect text not null default '' check (char_length(effect) <= 500),
   rarity text not null default 'common' check (rarity in ('common', 'uncommon', 'rare', 'epic', 'signature')),
   full_art boolean not null default false,
@@ -127,6 +125,31 @@ drop policy if exists "delete own cards (admins: any)" on public.cards;
 create policy "delete own cards (admins: any)" on public.cards
   for delete using (public.is_allowed() and (owner = auth.uid() or public.is_admin()));
 
+-- Custom keywords from the Keyword maker (cards store their "x-…" slug).
+create table if not exists public.keywords (
+  id uuid primary key default gen_random_uuid(),
+  owner uuid not null default auth.uid() references auth.users on delete cascade,
+  slug text not null unique check (slug ~ '^x-[a-z0-9]{1,30}$'),
+  label text not null check (char_length(label) between 1 and 24),
+  help text not null default '' check (char_length(help) <= 200),
+  color text not null default 'effect' check (color in ('timing', 'place', 'effect') or color ~ '^#[0-9a-fA-F]{6}$'),
+  created_at timestamptz not null default now()
+);
+alter table public.keywords enable row level security;
+
+drop policy if exists "friends can see keywords" on public.keywords;
+create policy "friends can see keywords" on public.keywords
+  for select using (public.is_allowed());
+drop policy if exists "friends can add keywords" on public.keywords;
+create policy "friends can add keywords" on public.keywords
+  for insert with check (public.is_allowed() and owner = auth.uid());
+drop policy if exists "edit own keywords (admins: any)" on public.keywords;
+create policy "edit own keywords (admins: any)" on public.keywords
+  for update using (public.is_allowed() and (owner = auth.uid() or public.is_admin()));
+drop policy if exists "delete own keywords (admins: any)" on public.keywords;
+create policy "delete own keywords (admins: any)" on public.keywords
+  for delete using (public.is_allowed() and (owner = auth.uid() or public.is_admin()));
+
 -- ---------------------------------------------------------------------
 -- 4. Decks
 --    cards: {"<card id>": copies, ...}   stars: {"speed": 6, "wit": 6}
@@ -150,6 +173,8 @@ alter table public.cards add column if not exists signature_of uuid references p
 alter table public.decks add column if not exists champion_id uuid references public.cards on delete set null;
 alter table public.cards add column if not exists is_token boolean not null default false;
 alter table public.decks add column if not exists sleeve jsonb;
+alter table public.cards drop constraint if exists cards_keywords_check;
+alter table public.cards add constraint cards_keywords_check check (cardinality(keywords) <= 16);
 alter table public.cards drop constraint if exists type_count;
 alter table public.cards add constraint type_count check (
   (card_type = 'superhorse' and cardinality(types) = 2)

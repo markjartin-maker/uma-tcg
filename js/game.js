@@ -346,13 +346,24 @@ window.Game = (() => {
 
   // Holding a mini lane (only your cards there) is worth MINI_LANE_FANS,
   // scored automatically whenever a fight check ends.
+  // Not scored: when both players agreed to fight, or at the fight check
+  // right before the Race (unless HOLD_FANS_BEFORE_RACE is on).
+  // A hold that would reach FANS_TO_WIN starts a showdown instead.
   function awardHolds(s) {
     if (G().AUTO_HOLD_FANS === false) return;
+    if (s.fight && s.fight.result === 'fight') return;
+    if (s.ramp >= RAMPS() && !G().HOLD_FANS_BEFORE_RACE) return;
     const pts = G().MINI_LANE_FANS ?? 50;
     for (const l of ['mini0', 'mini1']) {
       const owners = new Set((s.zones['lane:' + l] || []).map(i => s.cards[i]).filter(c => c && !c.attachedTo).map(c => c.owner));
       if (owners.size !== 1) continue;
       const pid = [...owners][0];
+      if (G().SHOWDOWN !== false && s.players[pid].fans + pts >= G().FANS_TO_WIN) {
+        if (s.showdown) { log(s, null, `${nameOf(s, pid)} holds ${LANE_LABEL[l]}, but a showdown is already coming.`); continue; }
+        s.showdown = { pid, lane: l, pts, active: false, made: s.round * 100 + s.ramp };
+        log(s, null, `${nameOf(s, pid)} holds ${LANE_LABEL[l]} and would reach ${G().FANS_TO_WIN} fans! No fans yet: a SHOWDOWN starts at the beginning of ${nameOf(s, opp(s, pid))}'s next turn.`);
+        continue;
+      }
       s.players[pid].fans += pts;
       log(s, null, `${nameOf(s, pid)} holds ${LANE_LABEL[l]}: +${pts} fans.`);
     }
@@ -394,6 +405,12 @@ window.Game = (() => {
 
   // Start of every Ramp: both players ready everything, channel Stars, draw 1.
   function startOfRamp(s) {
+    // A pending showdown starts on the opponent's next turn (a Ramp where they play units first).
+    if (s.showdown && !s.showdown.active && s.phase === 'ramp' && s.order[s.rampFirst] === opp(s, s.showdown.pid)) {
+      s.showdown.active = true;
+      log(s, null, `SHOWDOWN! ${nameOf(s, s.showdown.pid)} goes for the win. Settle it at the table, then press who won the showdown.`);
+    }
+    if (G().FLOAT_CLEARS_EACH_RAMP !== false) for (const pid of s.order) if (s.players[pid].float) s.players[pid].float = { energy: 0, power: {} };
     if (G().AUTO_START_OF_RAMP === false) return;
     const notes = [];
     for (const pid of s.order) {
@@ -433,7 +450,7 @@ window.Game = (() => {
       default: {
         const last = s.ramp >= RAMPS();
         return { title: last ? 'End of Ramp · Fight?' : `After Ramp ${s.ramp} · Fight?`, short: 'Fight?', who: null,
-          hint: `A mini lane is contested. Each player secretly chooses Fight or Refuse (refusing costs ${G().REFUSE_FIGHT_FANS ?? 50} fans). On Continue, whoever holds a mini lane alone gets +${G().MINI_LANE_FANS ?? 50}, then ${last ? 'the Race begins' : `Ramp ${s.ramp + 1} begins`}.` };
+          hint: `A mini lane is contested. Each player secretly chooses Fight or Refuse (refusing costs ${G().REFUSE_FIGHT_FANS ?? 50} fans). ${last && !G().HOLD_FANS_BEFORE_RACE ? 'Then the Race begins (holds are not scored here).' : `If nobody fights, whoever holds a mini lane alone gets +${G().MINI_LANE_FANS ?? 50} on Continue, then Ramp ${s.ramp + 1} begins.`}` };
       }
     }
   }
@@ -532,6 +549,49 @@ window.Game = (() => {
       }
       if (!got) throw new Error('No Stars left to channel.');
       return `channeled ${got} Star${got > 1 ? 's' : ''}`;
+    },
+
+    // Settle the showdown: if the challenger wins, they get the held fans (and usually the match).
+    showdownResult(s, me, won) {
+      const sd = s.showdown;
+      if (!sd) throw new Error('There is no showdown.');
+      s.showdown = null;
+      if (won) {
+        s.players[sd.pid].fans += sd.pts;
+        log(s, me, `marked the showdown: ${nameOf(s, sd.pid)} wins it (+${sd.pts} fans).`);
+        checkWinner(s);
+      } else log(s, me, `marked the showdown: ${nameOf(s, sd.pid)} failed. No fans.`);
+      return null;
+    },
+
+    // Several actions at once (multi-select). Ones that don't apply are skipped.
+    batch(s, me, list) {
+      const texts = [];
+      let skipped = 0;
+      for (const [name, ...args] of list || []) {
+        if (!A[name] || ['batch', 'undo', 'concede'].includes(name)) { skipped++; continue; }
+        try { const t = A[name](s, me, ...args); if (t) texts.push(t); } catch (e) { skipped++; }
+      }
+      if (!texts.length) throw new Error('None of those could be done.');
+      return texts.join('; ') + (skipped ? ` (${skipped} skipped)` : '');
+    },
+
+    // Floating Energy / Power: resources you've made but not spent yet.
+    floatAdj(s, me, kind, type, d) {
+      const p = s.players[me];
+      p.float = p.float || { energy: 0, power: {} };
+      if (kind === 'energy') p.float.energy = Math.max(0, (p.float.energy || 0) + d);
+      else p.float.power[type] = Math.max(0, (p.float.power[type] || 0) + d);
+      return null;
+    },
+    floatClear(s, me) { s.players[me].float = { energy: 0, power: {} }; return null; },
+
+    // Trash → bottom of your deck, shuffled (Stars go back under your Star deck).
+    recycleTrash(s, me) {
+      const list = U.shuffle([...(s.zones[`${me}:trash`] || [])]);
+      if (!list.length) throw new Error('Your trash is empty.');
+      for (const iid of list) moveCard(s, iid, s.defs[s.cards[iid].def] && s.defs[s.cards[iid].def].card_type === 'star' ? 'stars-bottom' : 'deck-bottom');
+      return `recycled their trash (${list.length} card${list.length > 1 ? 's' : ''}) to the bottom of their deck`;
     },
 
     // Exhaust n of your ready Stars at once (for paying energy).

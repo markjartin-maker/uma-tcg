@@ -62,6 +62,16 @@ window.DemoBackend = class DemoBackend {
   async listDecks() { return this.decks.map(d => U.clone(d)); }
   async getDeck(id) { const d = this.decks.find(x => x.id === id); return d ? U.clone(d) : null; }
   async uploadImage(file) { return URL.createObjectURL(file); }
+  async listKeywords() { return (this.keywords || []).map(k => ({ ...k })); }
+  async saveKeyword(k) {
+    this.keywords = this.keywords || [];
+    if (k.id) { const i = this.keywords.findIndex(x => x.id === k.id); this.keywords[i] = { ...this.keywords[i], label: k.label, help: k.help, color: k.color }; return this.keywords[i]; }
+    if (this.keywords.some(x => x.slug === k.slug)) throw new Error('A keyword with that name already exists.');
+    const row = { id: U.uid(), owner: this.me.id, slug: k.slug, label: k.label, help: k.help || '', color: k.color || 'effect' };
+    this.keywords.push(row);
+    return row;
+  }
+  async deleteKeyword(id) { this.keywords = (this.keywords || []).filter(k => k.id !== id); }
   async saveDeck(deck) {
     const row = { ...U.clone(deck), updated_at: new Date().toISOString() };
     if (row.id) {

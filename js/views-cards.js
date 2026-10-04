@@ -254,6 +254,7 @@ window.CardViews = (() => {
       return row;
     };
     const cjTags = chipSet(allTags, 'tags');
+    const cjKws = chipSet(() => Cards.KEYWORDS.map(k => [k.id, k.label.replace(/!$/, '')]), 'keywords');
     const cjSummary = h('p', { class: 'conjure-summary' });
     const conjureBox = h('fieldset', { class: 'conjure-box' },
       h('legend', null, 'Conjure settings'),
@@ -271,7 +272,7 @@ window.CardViews = (() => {
       h('div', { class: 'field' }, h('span', { class: 'label' }, 'Color (any of)'), chipSet(Cards.TYPES.map(t => [t.id, t.label, true]), 'colors')),
       h('div', { class: 'field' }, h('span', { class: 'label' }, 'Tags (any of)'), cjTags),
       h('div', { class: 'field' }, h('span', { class: 'label' }, 'Keywords (any of)'),
-        chipSet(Cards.KEYWORDS.map(k => [k.id, k.label.replace(/!$/, '')]), 'keywords')),
+        cjKws),
       cjSummary);
     function drawConjure() {
       conjureBox.hidden = !card.keywords.includes('conjure');
@@ -297,15 +298,26 @@ window.CardViews = (() => {
     }
 
     // keywords
-    const kwBox = h('div', { class: 'kw-pick' }, Cards.KEYWORDS.map(k => {
-      const cb = h('input', { type: 'checkbox', id: 'kw-' + k.id, checked: card.keywords.includes(k.id),
-        on: { change: e => {
-          autoKw.delete(k.id);
-          card.keywords = e.target.checked ? [...card.keywords, k.id] : card.keywords.filter(x => x !== k.id);
-          drawPreview();
-        } } });
-      return h('label', { class: 'kw-option', for: 'kw-' + k.id }, cb, h('span', null, h('strong', null, k.label), h('small', null, k.help)));
-    }));
+    const kwBox = h('div', { class: 'kw-pick' });
+    const canEditKw = k => k.custom && k.row && (k.row.owner === App.me.id || App.me.admin);
+    function drawKwBox() {
+      kwBox.replaceChildren(...Cards.KEYWORDS.map(k => {
+        const cb = h('input', { type: 'checkbox', id: 'kw-' + k.id, checked: card.keywords.includes(k.id),
+          on: { change: e => {
+            autoKw.delete(k.id);
+            card.keywords = e.target.checked ? [...card.keywords, k.id] : card.keywords.filter(x => x !== k.id);
+            drawPreview();
+          } } });
+        return h('label', { class: 'kw-option' + (k.custom ? ' custom' : ''), for: 'kw-' + k.id }, cb,
+          h('span', null, h('strong', null, Cards.keywordBadge(k.label.replace(/!$/, ''), false)), h('small', null, k.help || ' ')),
+          canEditKw(k) ? h('button', { type: 'button', class: 'linkish kw-edit', on: { click: e => { e.preventDefault(); e.stopPropagation(); keywordModal(k.row, keywordsChanged); } } }, 'Edit') : null);
+      }), h('button', { type: 'button', class: 'btn sm kw-new', on: { click: () => keywordModal(null, keywordsChanged) } }, '+ New keyword'));
+    }
+    // After the Keyword maker saves: reload everyone's keywords and redraw the lists.
+    async function keywordsChanged() {
+      await App.loadKeywords();
+      drawKwBox(); drawToolKws(); cjKws.redraw(); drawPreview();
+    }
 
     // effect
     const counter = h('span', { class: 'hint' });
@@ -349,6 +361,19 @@ window.CardViews = (() => {
     }
 
     // "Text modifiers" toolbar, like a Riftbound card maker.
+    const toolKws = h('div', { class: 'tool-row' });
+    function drawToolKws() {
+      toolKws.replaceChildren(...Cards.KEYWORDS.map(k => h('button', {
+        type: 'button', class: 'tool-kw', title: k.help,
+        on: { click: () => {
+          const label = k.label.replace(/!$/, '');
+          let t = `[${label}${arrowCb.checked ? '>' : ''}]`;
+          if (helpCb.checked && k.help) t += ` *(${k.help})*`;
+          t += arrowCb.checked ? ': ' : ' ';
+          insert(t);
+        } },
+      }, Cards.keywordBadge(k.label.replace(/!$/, ''), arrowCb.checked))));
+    }
     const arrowCb = h('input', { type: 'checkbox', id: 'tt-arrow', checked: true });
     const helpCb = h('input', { type: 'checkbox', id: 'tt-help' });
     const tools = h('div', { class: 'text-tools' },
@@ -360,16 +385,7 @@ window.CardViews = (() => {
       h('div', { class: 'tool-checks' },
         h('label', { for: 'tt-help' }, helpCb, 'Add keyword helper text'),
         h('label', { for: 'tt-arrow' }, arrowCb, 'Add keyword arrow')),
-      h('div', { class: 'tool-row' }, Cards.KEYWORDS.map(k => h('button', {
-        type: 'button', class: 'tool-kw', title: k.help,
-        on: { click: () => {
-          const label = k.label.replace(/!$/, '');
-          let t = `[${label}${arrowCb.checked ? '>' : ''}]`;
-          if (helpCb.checked) t += ` *(${k.help})*`;
-          t += arrowCb.checked ? ': ' : ' ';
-          insert(t);
-        } },
-      }, Cards.keywordBadge(k.label.replace(/!$/, ''), arrowCb.checked)))),
+      toolKws,
       h('p', { class: 'hint' }, 'Write ', h('code', null, '[Any Word]'), ' for your own keyword, ', h('code', null, '[Word>]'),
         ' for the arrow shape, ', h('code', null, '*text*'), ' for italics, ', h('code', null, '{E2}'), ' / ', h('code', null, '{P1}'), ' for costs.'));
     // Keep the keyword buttons' shape in step with the arrow checkbox.
@@ -466,7 +482,8 @@ window.CardViews = (() => {
       h('fieldset', null, h('legend', null, 'Tags'), tagRow, tagAdder,
         h('p', { class: 'hint' }, 'Running style or any group you like (click to switch on/off; add your own). Shown in the type line, and Conjure effects can filter by it.')),
       sigField,
-      h('fieldset', null, h('legend', null, 'Keywords'), kwBox),
+      h('fieldset', null, h('legend', null, 'Keywords'), kwBox,
+        h('p', { class: 'hint' }, '+ New keyword opens the Keyword maker: your keyword gets its own badge color and reminder text, and everyone can use it.')),
       conjureBox,
       h('div', { class: 'field' }, h('label', { for: 'mk-effect' }, 'Effect text'), effect, counter, tools),
       h('div', { class: 'field' }, h('label', { for: 'mk-art' }, 'Card art'), h('div', { class: 'row wrap' }, file, pasteBtn, adjust, clearArt), dropZone,
@@ -479,7 +496,59 @@ window.CardViews = (() => {
     el.append(h('section', { class: 'page' },
       h('div', { class: 'page-head' }, h('h1', null, editing ? (card.is_token ? 'Edit token' : 'Edit card') : card.is_token ? 'New token' : 'Card maker')),
       h('div', { class: 'maker' }, form, h('div', { class: 'maker-side' }, h('p', { class: 'eyebrow' }, 'Preview'), preview))));
+    drawKwBox(); drawToolKws();
     drawKinds(); drawTypes(); drawPreview();
+  }
+
+  // ---------- Keyword maker ----------
+  function keywordModal(existing, onDone) {
+    const k = existing ? { ...existing } : { label: '', help: '', color: 'effect' };
+    const label = h('input', { id: 'kwm-label', maxlength: 24, value: k.label, placeholder: 'e.g. Slipstream', on: { input: () => { k.label = label.value; drawPrev(); } } });
+    const help = h('textarea', { id: 'kwm-help', rows: 3, maxlength: 200, placeholder: 'What it means, e.g. "When this enters a lane, move an enemy unit."', on: { input: () => { k.help = help.value; } } });
+    help.value = k.help || '';
+    const prev = h('div', { class: 'kwm-preview' });
+    const colorIn = h('input', { type: 'color', id: 'kwm-color', value: /^#/.test(k.color) ? k.color : '#7a4fd0', on: { input: () => { k.color = colorIn.value; drawColors(); drawPrev(); } } });
+    const colors = h('div', { class: 'row wrap' });
+    function drawColors() {
+      colors.replaceChildren(...Cards.KW_GROUPS.map(g => h('button', { type: 'button', class: 'chip-btn' + (k.color === g.id ? ' on' : ''), style: { borderColor: g.color },
+        on: { click: () => { k.color = g.id; drawColors(); drawPrev(); } } }, g.label)),
+        h('label', { class: 'chip-btn sb-chip' + (/^#/.test(k.color) ? ' on' : ''), for: 'kwm-color' }, colorIn, 'Any color'));
+    }
+    function drawPrev() {
+      const bg = /^#/.test(k.color) ? k.color : (Cards.KW_GROUPS.find(g => g.id === k.color) || {}).color;
+      const t = (k.label || 'Keyword').trim();
+      prev.replaceChildren(
+        h('span', { class: 'kwb arrow', style: { background: bg } }, t), ' ',
+        h('span', { class: 'kwb', style: { background: bg } }, t));
+    }
+    drawColors(); drawPrev();
+    const err = h('p', { class: 'form-error' });
+    const save = h('button', { class: 'btn primary', on: { click: async () => {
+      const name = (k.label || '').trim();
+      if (!name) { err.textContent = 'Give the keyword a name.'; return; }
+      const builtin = Cards.KEYWORDS.find(x => !x.custom && x.label.replace(/!$/, '').toLowerCase() === name.toLowerCase());
+      if (builtin) { err.textContent = `"${builtin.label}" is already a built-in keyword.`; return; }
+      save.disabled = true;
+      try {
+        await App.backend.saveKeyword({ ...k, label: name, slug: existing ? existing.slug : Cards.kwSlug(name) });
+        m.close();
+        U.toast(`Keyword "${name}" saved.`, 'good');
+        if (onDone) await onDone();
+      } catch (e) { err.textContent = e.message; save.disabled = false; }
+    } } }, existing ? 'Save keyword' : 'Create keyword');
+    const del = existing ? h('button', { class: 'btn danger ghost', on: { click: async () => {
+      if (!(await U.ask(`Delete the keyword "${existing.label}"? Cards that use it keep the word in their text, but lose its color and reminder.`, 'Delete', true))) return;
+      try { await App.backend.deleteKeyword(existing.id); m.close(); if (onDone) await onDone(); } catch (e) { err.textContent = e.message; }
+    } } }, 'Delete') : null;
+    const m = U.modal(existing ? 'Edit keyword' : 'Keyword maker', h('div', { class: 'stack' },
+      h('div', { class: 'field' }, h('label', { for: 'kwm-label' }, 'Name'), label),
+      h('div', { class: 'field' }, h('span', { class: 'label' }, 'Badge color'), colors),
+      h('div', { class: 'field' }, h('label', { for: 'kwm-help' }, 'Reminder text (shown when you hover the keyword, and in the card maker)'), help),
+      h('div', { class: 'field' }, h('span', { class: 'label' }, 'Preview'), prev),
+      h('p', { class: 'hint' }, 'Everyone in your group can use it. On a card, tick it in Keywords or write [Name>] in the effect text.'),
+      err,
+      h('div', { class: 'row between' }, del || h('span'), save)));
+    label.focus();
   }
 
   return { renderPool, renderMaker };
