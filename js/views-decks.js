@@ -8,14 +8,30 @@ window.DeckViews = (() => {
     const out = [];
     const leader = cards.find(c => c.id === deck.leader_id);
     if (!leader) out.push('Pick a Superhorse Uma as your leader.');
-    const total = Object.values(deck.cards || {}).reduce((a, b) => a + b, 0);
-    if (total !== G().DECK_SIZE) out.push(`The deck has ${total} cards (should be ${G().DECK_SIZE}).`);
+    const champ = deck.champion_id ? cards.find(c => c.id === deck.champion_id) : null;
+    if (deck.champion_id && !champ) out.push('Your Champion was deleted from the pool.');
+    if (!deck.champion_id) out.push('Pick a Champion Uma (an Uma with a subtitle) for the Champion slot.');
+    if (champ && !Cards.isChampion(champ)) out.push(`${champ.name} isn't a Champion Uma (Champions have a subtitle).`);
+    if (champ && leader && !champ.types.every(t => leader.types.includes(t))) out.push(`Your Champion ${champ.name} doesn't match your leader's types.`);
+    const total = Object.values(deck.cards || {}).reduce((a, b) => a + b, 0) + (champ ? 1 : 0);
+    if (total !== G().DECK_SIZE) out.push(`The deck has ${total} cards${champ ? ' (counting the Champion)' : ''} (should be ${G().DECK_SIZE}).`);
+    let sigs = 0;
     for (const [id, n] of Object.entries(deck.cards || {})) {
       const c = cards.find(x => x.id === id);
       if (!c) { out.push('A card in this deck was deleted from the pool.'); continue; }
-      if (n > G().MAX_COPIES) out.push(`${n} copies of ${c.name} (max ${G().MAX_COPIES}).`);
+      const copies = n + (id === deck.champion_id ? 1 : 0);
+      if (copies > G().MAX_COPIES) out.push(`${copies} copies of ${c.name}${id === deck.champion_id ? ' (counting the Champion)' : ''} (max ${G().MAX_COPIES}).`);
       if (leader && !c.types.every(t => leader.types.includes(t))) out.push(`${c.name} doesn't match your leader's types.`);
+      if (c.signature_of) {
+        sigs += n;
+        if (c.signature_of !== deck.leader_id) {
+          const of = cards.find(x => x.id === c.signature_of);
+          out.push(`${c.name} is a Signature card of ${of ? of.name : 'another Superhorse'}.`);
+        }
+      }
     }
+    const maxSig = G().SIGNATURES_PER_DECK ?? 3;
+    if (sigs > maxSig) out.push(`${sigs} Signature cards (max ${maxSig}).`);
     const stars = Object.values(deck.stars || {}).reduce((a, b) => a + b, 0);
     if (stars !== G().STAR_DECK_SIZE) out.push(`${stars} Stars (should be ${G().STAR_DECK_SIZE}).`);
     return out;
@@ -34,7 +50,7 @@ window.DeckViews = (() => {
         h('button', { class: 'btn primary', on: { click: () => { el.replaceChildren(); renderBuilder(el, null, cards); } } }, 'New deck')),
       mine.length ? h('div', { class: 'deck-list' }, mine.map(d => {
         const leader = cards.find(c => c.id === d.leader_id);
-        const count = Object.values(d.cards || {}).reduce((a, b) => a + b, 0);
+        const count = Object.values(d.cards || {}).reduce((a, b) => a + b, 0) + (d.champion_id ? 1 : 0);
         const warn = problems(d, cards);
         return h('button', { class: 'deck-tile', on: { click: () => { el.replaceChildren(); renderBuilder(el, d, cards); } } },
           leader ? Cards.render(leader, { size: 's' }) : h('div', { class: 'card card-back sz-s' }),
@@ -49,6 +65,11 @@ window.DeckViews = (() => {
     const deck = existing ? U.clone(existing) : { name: 'New deck', leader_id: null, cards: {}, stars: {} };
     const leaders = cards.filter(c => c.card_type === 'superhorse');
     const leader = () => cards.find(c => c.id === deck.leader_id);
+    const champion = () => deck.champion_id ? cards.find(c => c.id === deck.champion_id) : null;
+    const fitsLeader = c => { const l = leader(); return !l || c.types.every(t => l.types.includes(t)); };
+    const champSel = h('select', { id: 'dk-champ', on: { change: e => { deck.champion_id = e.target.value || null; draw(); } } });
+    const champBox = h('div', { class: 'leader-box champ-box' });
+    const setChampion = id => { deck.champion_id = id; draw(); };
 
     const name = h('input', { id: 'dk-name', maxlength: 40, value: deck.name, on: { input: e => (deck.name = e.target.value) } });
     const leaderSel = h('select', { id: 'dk-leader', on: { change: e => {
@@ -79,22 +100,33 @@ window.DeckViews = (() => {
     function drawPool() {
       const l = leader();
       const q = search.value.trim().toLowerCase();
-      const fits = cards.filter(c => c.card_type !== 'superhorse' && (!l || c.types.every(t => l.types.includes(t))) &&
+      // Signature cards only show for the Superhorse they belong to.
+      const fits = cards.filter(c => c.card_type !== 'superhorse' && fitsLeader(c) &&
+        (!c.signature_of || (l && c.signature_of === l.id) || deck.cards[c.id]) &&
         (!q || c.name.toLowerCase().includes(q) || (c.effect || '').toLowerCase().includes(q)));
       poolBox.replaceChildren(...(fits.length ? fits.map(c => {
         const n = deck.cards[c.id] || 0;
-        return h('div', { class: 'pool-item' + (n ? ' in' : '') },
+        const isChamp = deck.champion_id === c.id;
+        return h('div', { class: 'pool-item' + (n || isChamp ? ' in' : '') },
           Cards.render(c, { size: 'm' }),
           h('div', { class: 'stepper' },
             h('button', { class: 'icon-btn', 'aria-label': 'Remove one ' + c.name, disabled: !n, on: { click: () => setCount(c.id, n - 1) } }, '−'),
             h('span', { class: 'n' }, n),
-            h('button', { class: 'icon-btn', 'aria-label': 'Add one ' + c.name, on: { click: () => setCount(c.id, n + 1) } }, '+')));
+            h('button', { class: 'icon-btn', 'aria-label': 'Add one ' + c.name, on: { click: () => setCount(c.id, n + 1) } }, '+')),
+          Cards.isChampion(c) ? h('button', { class: 'btn sm' + (isChamp ? ' on' : ' ghost'), 'aria-pressed': String(isChamp),
+            on: { click: () => setChampion(isChamp ? null : c.id) } }, isChamp ? '★ Champion' : 'Set as Champion') : null);
       }) : [h('p', { class: 'muted' }, l ? 'No cards in the pool match this leader yet.' : 'Choose a leader to see the cards that fit.')]));
     }
 
     function draw() {
       const l = leader();
       leaderBox.replaceChildren(l ? Cards.render(l, { size: 'm' }) : h('div', { class: 'card card-back sz-m' }, h('span', null, 'No leader')));
+      const champs = cards.filter(c => Cards.isChampion(c) && fitsLeader(c));
+      const ch = champion();
+      champSel.replaceChildren(h('option', { value: '' }, champs.length ? 'Choose a Champion…' : 'No Champion Umas fit yet'),
+        ...champs.map(c => h('option', { value: c.id, selected: c.id === deck.champion_id }, `${c.name}${c.subtitle ? ' — ' + c.subtitle : ''}`)),
+        ...(ch && !champs.includes(ch) ? [h('option', { value: ch.id, selected: true }, ch.name + ' (doesn\'t fit)')] : []));
+      champBox.replaceChildren(ch ? Cards.render(ch, { size: 'm' }) : h('div', { class: 'card card-back sz-m' }, h('span', null, 'No Champion')));
       // stars split
       if (l) {
         const [a, b] = l.types;
@@ -112,7 +144,7 @@ window.DeckViews = (() => {
 
       const entries = Object.entries(deck.cards).map(([id, n]) => ({ c: cards.find(x => x.id === id), n })).filter(e => e.c)
         .sort((x, y) => (x.c.energy - y.c.energy) || x.c.name.localeCompare(y.c.name));
-      const total = entries.reduce((a, e) => a + e.n, 0);
+      const total = entries.reduce((a, e) => a + e.n, 0) + (champion() ? 1 : 0);
       countEl.textContent = `${total} / ${G().DECK_SIZE}`;
       countEl.className = 'deck-count' + (total === G().DECK_SIZE ? ' ok' : '');
       listBox.replaceChildren(...(entries.length ? entries.map(({ c, n }) => h('div', { class: 'deck-line', style: { '--c1': `var(--t-${c.types[0]})` } },
@@ -159,6 +191,8 @@ window.DeckViews = (() => {
           h('div', { class: 'field' }, h('label', { for: 'dk-name' }, 'Deck name'), name),
           h('div', { class: 'field' }, h('label', { for: 'dk-leader' }, 'Superhorse Uma (leader)'), leaderSel),
           leaderBox, starsBox,
+          h('div', { class: 'field' }, h('label', { for: 'dk-champ' }, 'Champion slot (counts toward the deck)'), champSel),
+          champBox,
           h('div', { class: 'deck-head' }, h('h3', null, 'Main deck'), countEl),
           listBox,
           warnBox))));

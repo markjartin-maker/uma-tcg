@@ -78,7 +78,7 @@ window.CardViews = (() => {
     card.tags = card.tags || [];
     card.conjure = Cards.conjureOf(card) || { ...Cards.CONJURE_DEFAULT };
     let pool = [];
-    App.backend.listCards().then(list => { pool = list; drawPreview(); }).catch(() => {});
+    App.backend.listCards().then(list => { pool = list; drawTags(); drawSig(); cjTags.redraw(); drawPreview(); }).catch(() => {});
     let imageFile = null;
     let previewUrl = card.image_url;
     const preview = h('div', { class: 'maker-preview' });
@@ -106,7 +106,8 @@ window.CardViews = (() => {
           if (t.id === 'superhorse') { card.energy = 0; card.power = 0; if (card.might == null || card.might === '') card.might = 4; }
           if (t.id === 'trick') card.might = null;
           if (t.id === 'superhorse') { card.full_art = true; if (fullArtCb) fullArtCb.checked = true; }
-          syncFields(); drawKinds(); drawTypes(); drawPreview();
+          if (t.id === 'superhorse' && card.signature_of) card.signature_of = null;
+          syncFields(); drawKinds(); drawTypes(); drawSig(); drawPreview();
         } },
       }, t.label)));
       kindHelp.textContent = Cards.CARD_TYPES.find(t => t.id === card.card_type).help;
@@ -152,14 +153,46 @@ window.CardViews = (() => {
     }, h('span', { class: 'rar-gem' }, r.gem), r.label)));
     drawRarity();
 
-    // tags
+    // tags: built-in running styles + every custom tag used in the pool + your own
+    const allTags = () => {
+      const ids = Cards.TAGS.map(t => t.id);
+      for (const c of [...pool, card]) for (const t of c.tags || []) if (!ids.includes(t)) ids.push(t);
+      return ids.map(id => [id, Cards.tagLabel(id)]);
+    };
     const tagRow = h('div', { class: 'type-chips' });
-    const drawTags = () => tagRow.replaceChildren(...Cards.TAGS.map(t => {
-      const on = card.tags.includes(t.id);
+    const drawTags = () => tagRow.replaceChildren(...allTags().map(([id, label]) => {
+      const on = card.tags.includes(id);
       return h('button', { type: 'button', class: 'type-chip tag-chip' + (on ? ' on' : ''), 'aria-pressed': String(on),
-        on: { click: () => { card.tags = on ? card.tags.filter(x => x !== t.id) : [...card.tags, t.id]; drawTags(); drawPreview(); } } }, t.label);
+        on: { click: () => { card.tags = on ? card.tags.filter(x => x !== id) : [...card.tags, id]; drawTags(); drawPreview(); } } }, label);
     }));
+    const tagIn = h('input', { id: 'mk-tag', maxlength: 24, placeholder: 'New tag, e.g. Sprinter',
+      on: { keydown: e => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } } } });
+    function addTag() {
+      const t = tagIn.value.trim().replace(/\s+/g, ' ');
+      if (!t) return;
+      const known = allTags().find(([id, label]) => label.toLowerCase() === t.toLowerCase() || id === t.toLowerCase());
+      const id = known ? known[0] : t;
+      if (!card.tags.includes(id)) {
+        if (card.tags.length >= 6) { U.toast('A card can have at most 6 tags.', 'error'); return; }
+        card.tags = [...card.tags, id];
+      }
+      tagIn.value = '';
+      drawTags(); cjTags.redraw(); drawPreview();
+    }
+    const tagAdder = h('div', { class: 'row tag-adder' }, tagIn, h('button', { type: 'button', class: 'btn sm', on: { click: addTag } }, '+ Add tag'));
     drawTags();
+
+    // Signature card of a Superhorse (only fits decks led by it; max per deck in config)
+    const sigSel = h('select', { id: 'mk-sig', on: { change: e => { card.signature_of = e.target.value || null; drawPreview(); } } });
+    const sigField = h('div', { class: 'field' }, h('label', { for: 'mk-sig' }, 'Signature card of (optional)'), sigSel,
+      h('p', { class: 'hint' }, `A Signature card only fits decks led by that Superhorse, and a deck can have at most ${window.CONFIG.GAME.SIGNATURES_PER_DECK ?? 3} Signature cards. Its type line says "Signature".`));
+    function drawSig() {
+      const leaders = pool.filter(c => c.card_type === 'superhorse' && c.id !== card.id);
+      sigSel.replaceChildren(h('option', { value: '' }, 'Not a Signature card'),
+        ...leaders.map(l => h('option', { value: l.id, selected: l.id === card.signature_of }, l.name)));
+      sigField.hidden = card.card_type === 'superhorse';
+    }
+    drawSig();
 
     // conjure settings (shown when the card has the Conjure keyword)
     const cj = card.conjure;
@@ -181,15 +214,17 @@ window.CardViews = (() => {
     };
     const chipSet = (items, key) => {
       const row = h('div', { class: 'type-chips' });
-      const draw = () => row.replaceChildren(...items.map(([id, label, color]) => {
+      const draw = () => row.replaceChildren(...(typeof items === 'function' ? items() : items).map(([id, label, color]) => {
         const on = cj[key].includes(id);
         return h('button', { type: 'button', class: 'type-chip' + (color ? '' : ' tag-chip') + (on ? ' on' : ''), 'aria-pressed': String(on),
           style: color ? { '--c1': `var(--t-${id})` } : null,
           on: { click: () => { cj[key] = on ? cj[key].filter(x => x !== id) : [...cj[key], id]; draw(); drawPreview(); } } }, label);
       }));
       draw();
+      row.redraw = draw;
       return row;
     };
+    const cjTags = chipSet(allTags, 'tags');
     const cjSummary = h('p', { class: 'conjure-summary' });
     const conjureBox = h('fieldset', { class: 'conjure-box' },
       h('legend', null, 'Conjure settings'),
@@ -205,7 +240,7 @@ window.CardViews = (() => {
         h('div', { class: 'field' }, h('label', { for: 'cj-dest' }, 'Goes to'),
           sel('cj-dest', cj.dest, [['hand', 'Hand'], ['base', 'Base'], ['deck-top', 'Top of deck']], v => (cj.dest = v)))),
       h('div', { class: 'field' }, h('span', { class: 'label' }, 'Color (any of)'), chipSet(Cards.TYPES.map(t => [t.id, t.label, true]), 'colors')),
-      h('div', { class: 'field' }, h('span', { class: 'label' }, 'Tags (any of)'), chipSet(Cards.TAGS.map(t => [t.id, t.label]), 'tags')),
+      h('div', { class: 'field' }, h('span', { class: 'label' }, 'Tags (any of)'), cjTags),
       cjSummary);
     function drawConjure() {
       conjureBox.hidden = !card.keywords.includes('conjure');
@@ -328,6 +363,45 @@ window.CardViews = (() => {
         if (await cropFrom(f)) artSource = f;
         e.target.value = '';
       } } });
+    // Paste (Ctrl+V anywhere on this page) or drop an image instead of downloading it first.
+    const useImage = async f => {
+      if (!f || !/^image\//.test(f.type)) { U.toast("That isn't an image.", 'error'); return; }
+      if (f.size > 15 * 1024 * 1024) { U.toast('That image is over 15 MB. Pick a smaller one.', 'error'); return; }
+      if (await cropFrom(f)) artSource = f;
+    };
+    const imageFrom = list => [...(list || [])].map(it => (it.getAsFile ? (it.kind === 'file' ? it.getAsFile() : null) : it)).find(f => f && /^image\//.test(f.type));
+    const onPaste = e => {
+      if (!form.isConnected) { document.removeEventListener('paste', onPaste); return; }
+      if (document.querySelector('.modal-backdrop, .modal')) return;
+      const f = imageFrom(e.clipboardData && e.clipboardData.items);
+      if (!f) return; // plain text pastes go into the field as usual
+      e.preventDefault();
+      useImage(f);
+    };
+    document.addEventListener('paste', onPaste);
+    const pasteBtn = h('button', { type: 'button', class: 'btn sm', on: { click: async () => {
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.read) throw new Error('no api');
+        const items = await navigator.clipboard.read();
+        for (const it of items) {
+          const type = it.types.find(t => t.startsWith('image/'));
+          if (type) { const b = await it.getType(type); await useImage(new File([b], 'pasted.' + type.split('/')[1], { type })); return; }
+        }
+        U.toast('No image on the clipboard. Right-click an image → Copy image, then try again.', 'error');
+      } catch (err) {
+        U.toast('Your browser blocked reading the clipboard. Press Ctrl+V (⌘V on Mac) on this page instead.', 'error');
+      }
+    } } }, 'Paste image');
+    const dropZone = h('div', { class: 'art-drop', tabindex: '-1' }, 'Copy an image anywhere (right-click → Copy image) and press Ctrl+V / ⌘V here, or drop an image file on this box.');
+    for (const ev of ['dragenter', 'dragover']) dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add('over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('over');
+      const f = imageFrom(e.dataTransfer && e.dataTransfer.files);
+      if (f) useImage(f);
+      else U.toast('Drop an image file (saved or dragged from your computer). For images on websites, copy and paste them instead.', 'error');
+    });
     const adjust = h('button', { type: 'button', class: 'btn sm', disabled: !artSource, on: { click: () => artSource && cropFrom(artSource) } }, 'Adjust crop');
     const clearArt = h('button', { type: 'button', class: 'btn ghost sm', on: { click: () => { imageFile = null; previewUrl = null; card.image_url = null; artSource = null; adjust.disabled = true; file.value = ''; drawPreview(); } } }, 'Remove art');
 
@@ -358,12 +432,13 @@ window.CardViews = (() => {
         h('label', { class: 'check', for: 'mk-fullart' }, fullArtCb, 'Full-art frame (the art fills the whole card)'),
         h('p', { class: 'hint' }, 'Epic and Signature cards use full art by default. Superhorses always do.')),
       h('div', { class: 'num-row' }, energy.field, power.field, might.field),
-      h('fieldset', null, h('legend', null, 'Tags'), tagRow,
-        h('p', { class: 'hint' }, 'Running style. Shown in the type line, and Conjure effects can filter by it.')),
+      h('fieldset', null, h('legend', null, 'Tags'), tagRow, tagAdder,
+        h('p', { class: 'hint' }, 'Running style or any group you like (click to switch on/off; add your own). Shown in the type line, and Conjure effects can filter by it.')),
+      sigField,
       h('fieldset', null, h('legend', null, 'Keywords'), kwBox),
       conjureBox,
       h('div', { class: 'field' }, h('label', { for: 'mk-effect' }, 'Effect text'), effect, counter, tools),
-      h('div', { class: 'field' }, h('label', { for: 'mk-art' }, 'Card art'), h('div', { class: 'row wrap' }, file, adjust, clearArt),
+      h('div', { class: 'field' }, h('label', { for: 'mk-art' }, 'Card art'), h('div', { class: 'row wrap' }, file, pasteBtn, adjust, clearArt), dropZone,
         h('p', { class: 'hint' }, 'PNG, JPG, WebP or GIF, up to 15 MB. You crop it to the card after choosing it (it\'s saved as a smaller image). If you switch full art on or off, press Adjust crop to re-frame it. Use art you made or have permission to use.')),
       errors,
       h('div', { class: 'row' },

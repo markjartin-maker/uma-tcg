@@ -192,7 +192,10 @@ window.DemoBackend = class DemoBackend {
       'Ringside Chant': { kind: 'uma', colors: ['power'], energyOp: 'le', energy: 2, dest: 'hand' },
       'Mudlark': { kind: 'trick', energyOp: 'le', energy: 1, colors: ['guts'], dest: 'hand' },
     };
+    const sigs = { 'Photo Finish': 'Northern Gale', 'Ringside Chant': 'Granite Heart' };
+    const idOf = n => 'sample-' + n.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     return DemoBackend.sampleCards().map(c => ({
+      signature_of: sigs[c.name] ? idOf(sigs[c.name]) : null,
       ...c, rarity: (rar[c.name] || ['common'])[0], full_art: !!(rar[c.name] || [])[1], subtitle: subs[c.name] || null,
       tags: tags[c.name] || [], conjure: conj[c.name] ? { ...Cards.CONJURE_DEFAULT, ...conj[c.name] } : null,
       keywords: conj[c.name] && !c.keywords.includes('conjure') ? [...c.keywords, 'conjure'] : c.keywords,
@@ -212,8 +215,11 @@ window.DemoBackend = class DemoBackend {
   }
 
   static sampleDecks(cards) {
-    const build = (owner, name, leaderName, types) => {
-      const pool = cards.filter(c => c.card_type !== 'superhorse' && c.types.every(t => types.includes(t)));
+    const build = (owner, name, leaderName, types, champName) => {
+      const leaderId = cards.find(c => c.name === leaderName).id;
+      const champ = cards.find(c => c.name === champName);
+      const pool = cards.filter(c => c.card_type !== 'superhorse' && c.types.every(t => types.includes(t)) &&
+        (!c.signature_of || c.signature_of === leaderId));
       const counts = {};
       let total = 0;
       pool.forEach((c, i) => {
@@ -221,17 +227,19 @@ window.DemoBackend = class DemoBackend {
         counts[c.id] = n;
         total += n;
       });
-      // trim / pad to exactly 40
+      // The Champion takes one of its 3 copies; Signature cards max 3 (they're all 3s or fewer).
+      if (champ && counts[champ.id]) { counts[champ.id]--; total--; if (!counts[champ.id]) delete counts[champ.id]; }
+      const target = 40 - (champ ? 1 : 0);
       const ids = Object.keys(counts);
-      for (let i = ids.length - 1; total > 40 && i >= 0; i--) { counts[ids[i]]--; total--; if (!counts[ids[i]]) delete counts[ids[i]]; }
+      for (let i = ids.length - 1; total > target && i >= 0; i--) { counts[ids[i]]--; total--; if (!counts[ids[i]]) delete counts[ids[i]]; }
       return {
-        id: 'deck-' + owner, owner, name, leader_id: cards.find(c => c.name === leaderName).id, cards: counts,
+        id: 'deck-' + owner, owner, name, leader_id: leaderId, champion_id: champ ? champ.id : null, cards: counts,
         stars: { [types[0]]: 6, [types[1]]: 6 }, updated_at: '2026-10-01T00:00:00Z',
       };
     };
     return [
-      build('u-you', 'Gale Tempo', 'Northern Gale', ['speed', 'wit']),
-      build('u-rival', 'Granite Grind', 'Granite Heart', ['power', 'guts']),
+      build('u-you', 'Gale Tempo', 'Northern Gale', ['speed', 'wit'], 'Quiet Thunder'),
+      build('u-rival', 'Granite Grind', 'Granite Heart', ['power', 'guts'], 'Boulder Run'),
     ];
   }
 };

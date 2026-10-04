@@ -16,7 +16,16 @@ window.CONFIG = {
     STAR_DECK_SIZE: 12,   // stars split between the leader's two types
     STARTING_HAND: 5,     // cards drawn when a match starts
     STARS_PER_RAMP: 2,    // "Channel 2 Stars"
-    RAMPS_PER_RACE: 2,    // Ramp phases before each Race (order switches each Ramp)
+    RAMPS_PER_RACE: 3,    // Ramp phases before each Race (order switches each Ramp)
+    // Fight check: always after the last Ramp. From round MID_FIGHT_FROM_ROUND
+    // on (i.e. after the first Race), also one after Ramp MID_FIGHT_AFTER_RAMP.
+    // Set MID_FIGHT_AFTER_RAMP to 0 to turn the extra check off.
+    MID_FIGHT_AFTER_RAMP: 2,
+    MID_FIGHT_FROM_ROUND: 2,
+    REFUSE_FIGHT_FANS: 50, // fans lost for refusing a fight
+    // Units moved between base and lanes become exhausted automatically.
+    EXHAUST_ON_MOVE: true,
+    SIGNATURES_PER_DECK: 3, // max Signature cards (of your Champion) per deck
     // At the start of every Ramp, both players automatically ready all their
     // cards and Stars, channel STARS_PER_RAMP Stars, and draw 1 card.
     AUTO_START_OF_RAMP: true,
@@ -30,8 +39,8 @@ window.CONFIG = {
     // After a Race ends, units still in the Lane go back to their owner's base.
     // Set to false to leave them in the Lane and move them by hand.
     RETURN_UNITS_AFTER_RACE: true,
-    // Environments stay on their mini lane until replaced ('stay'),
-    // or all go to the trash when a Race ends ('trash').
-    ENVIRONMENTS_AFTER_RACE: 'stay',
+    // Environments all go to the trash when a Race ends ('trash'),
+    // or stay on their mini lane until replaced ('stay').
+    ENVIRONMENTS_AFTER_RACE: 'trash',
   },
 };

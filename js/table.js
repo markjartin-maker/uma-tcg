@@ -78,8 +78,10 @@ window.Table = (() => {
   // If the server disagrees (e.g. the other player acted at the same moment),
   // the table snaps to the server's version once everything is saved.
   function act(name, ...args) {
-    closeMenu();
     if (!ui) return;
+    const keep = ui.keepMenu;
+    ui.keepMenu = false;
+    if (!keep) closeMenu();
     const actor = me();
     const id = ui.id;
     const defs = ui.defs;
@@ -93,6 +95,7 @@ window.Table = (() => {
     ui.row = { ...ui.row, state: local };
     ui.pending++;
     draw();
+    if (keep) refreshMenu();
     ui.queue = ui.queue.then(async () => {
       let row = null, failed = null;
       try {
@@ -119,13 +122,13 @@ window.Table = (() => {
   function passWithSpace() {
     const s = S();
     if (s.winner) return;
-    if (s.chain && s.chain.length) { U.toast('Resolve the chain first (S).'); return; }
+    if (s.phase === 'mulligan') { U.toast('Keep your hand or mulligan first (buttons at the top).'); return; }
     if (s.phase === 'ramp' && s.step < 3) {
       const t = Game.rampText(s);
       if (t.who === me()) act('nextStep');
       else U.toast(`It's ${Game.nameOf(s, t.who)}'s step. Use the Pass button to pass for them.`);
     } else {
-      U.toast(s.phase === 'race' ? 'Use End Race in the sidebar when the Race is done.' : 'Use the sidebar to fight or begin the Race.');
+      U.toast(s.phase === 'race' ? 'Use End Race (top right) when the Race is done.' : 'Choose Fight or Refuse (top right), then Continue.');
     }
   }
 
@@ -144,8 +147,7 @@ window.Table = (() => {
     const board = h('div', { class: 'board' + (s.phase === 'race' ? ' racing' : ''), id: 'board' },
       sideEl(op, true),
       lanesEl(),
-      sideEl(my, false),
-      svg);
+      sideEl(my, false));
     const prevStars = new Map();
     for (const el of ui.el.querySelectorAll('.zone-pool .slot[data-iid]')) {
       const tok = el.querySelector('.star-token');
@@ -156,10 +158,12 @@ window.Table = (() => {
       log: (ui.el.querySelector('.log-list') || {}).scrollTop || 0 };
     board.addEventListener('contextmenu', e => e.preventDefault());
     const hud = hudEl();
+    const scroller = h('div', { class: 'board-scroll' }, board, s.phase === 'mulligan' ? mulliganEl() : null);
+    const side = sidebarEl();
+    scroller.addEventListener('scroll', () => requestAnimationFrame(drawArrows), { passive: true });
+    side.addEventListener('scroll', () => requestAnimationFrame(drawArrows), { passive: true });
     const wrap = h('div', { class: 'table' + (ui.pick ? ' picking' : '') },
-      hud,
-      h('div', { class: 'board-scroll' }, board),
-      sidebarEl());
+      hud, scroller, side, svg);
     ui.el.replaceChildren(wrap);
     wrap.querySelector('.board-scroll').scrollLeft = old.x;
     wrap.querySelector('.sidebar').scrollTop = old.side;
@@ -173,7 +177,7 @@ window.Table = (() => {
         setTimeout(drawArrows, 340);
       }));
     }
-    for (const c of Object.values(s.cards)) ui.prevEx.set(c.iid, c.exhausted);
+    for (const c of Object.values(s.cards)) ui.prevEx.set(c.iid, Game.shownExhausted(c, my));
     animateStars(prevStars);
     // Turn bar: slide the marker from where it was to where it is now.
     const track = Game.phaseTrack(s);
@@ -208,6 +212,25 @@ window.Table = (() => {
     for (const p of s.pings || []) ui.seenPings.add(p.n);
   }
 
+  // Start of the match: look at your hand, keep it or mulligan it (once).
+  function mulliganEl() {
+    const s = S();
+    const my = me();
+    const op = Game.opp(s, my);
+    const done = s.mulligan[my];
+    const n = (s.zones[my + ':hand'] || []).length;
+    const theirs = s.mulligan[op];
+    return h('div', { class: 'mull-panel', role: 'dialog', 'aria-label': 'Mulligan' },
+      h('p', { class: 'eyebrow' }, 'Starting hand'),
+      done
+        ? h('p', null, done === 'keep' ? 'You kept your hand.' : 'You drew a new hand.', ' ', theirs ? 'Starting…' : `Waiting for ${Game.nameOf(s, op)}…`)
+        : [h('p', null, `Look at your ${n} cards below. Keep them, or shuffle all of them back and draw ${n} new ones. You can only do this once.`),
+          h('div', { class: 'row center' },
+            h('button', { class: 'btn primary', on: { click: () => act('mulligan', 'keep') } }, 'Keep hand'),
+            h('button', { class: 'btn', on: { click: () => act('mulligan', 'redraw') } }, `Mulligan (draw ${n} new)`))],
+      h('p', { class: 'hint' }, `${Game.nameOf(s, op)}: ${theirs ? 'decided' : 'deciding…'}`));
+  }
+
   function winnerEl() {
     const s = S();
     const won = s.winner === me();
@@ -234,21 +257,25 @@ window.Table = (() => {
     const deckN = (s.zones[key('deck')] || []).length;
     const starsN = (s.zones[key('stars')] || []).length;
     const trash = zoneCards(key('trash'));
+    const banished = zoneCards(key('banish'));
     const hand = zoneCards(key('hand'));
     const mine = pid === me();
 
     const fans = h('div', { class: 'fans' + (mine ? ' mine' : '') },
       h('div', { class: 'fans-name' }, p.name, p.revealHand ? h('span', { class: 'pill' }, 'Hand revealed') : null),
-      h('div', { class: 'fans-num' }, h('span', { class: 'n' }, p.fans), h('span', { class: 'of' }, 'fans')),
+      h('div', { class: 'fans-num' + (p.fans < 0 ? ' neg' : '') }, h('span', { class: 'n' }, p.fans), h('span', { class: 'of' }, 'fans')),
       h('div', { class: 'fans-btns' },
-        [-10, 10, G().MINI_LANE_FANS, G().RACE_FANS].map(d => h('button', { class: 'chip-btn', on: { click: () => act('fans', pid, d) } }, (d > 0 ? '+' : '') + d))));
+        [-10, -5, 5, 10, G().MINI_LANE_FANS, G().RACE_FANS].map(d => h('button', { class: 'chip-btn', on: { click: () => act('fans', pid, d) } }, (d > 0 ? '+' : '') + d))));
 
     const piles = h('div', { class: 'piles' },
       pileEl('Deck', deckN, mine ? { click: () => act('draw', 1), context: () => deckMenu(pid), title: 'Click: draw 1 · Right-click: shuffle or search' } : null, 'deck-top', pid),
       pileEl('Stars', starsN, mine ? { click: () => act('channel', 1), title: 'Click: channel 1 Star' } : null, null, pid),
-      pileEl('Trash', trash.length, { click: () => trashModal(pid), context: () => trashModal(pid), title: 'Click: look at the trash' }, 'trash', pid, trash.length ? trash[trash.length - 1] : null));
+      pileEl('Trash', trash.length, { click: () => trashModal(pid), context: () => trashModal(pid), title: 'Click: look at the trash' }, 'trash', pid, trash.length ? trash[trash.length - 1] : null),
+      banished.length ? pileEl('Banished', banished.length, { click: () => trashModal(pid, 'banish'), context: () => trashModal(pid, 'banish'), title: 'Click: look at banished cards (out of the game)' }, 'banish', pid, banished[banished.length - 1]) : null);
 
-    const leader = zoneEl(key('leader'), 'leader', 'Superhorse', pid);
+    const champ = zoneCards(key('champion'));
+    const leader = h('div', { class: 'heroes' }, zoneEl(key('leader'), 'leader', 'Superhorse', pid),
+      champ.length ? zoneEl(key('champion'), 'champion', 'Champion', pid) : null);
     const base = zoneEl(key('base'), 'base', 'Base', pid);
     const pool = zoneEl(key('pool'), 'pool', 'Star pool', pid, true);
 
@@ -319,10 +346,13 @@ window.Table = (() => {
         const envEls = slots.map((k, i) => {
           const env = zoneCards(k)[0];
           if (env) tint[i ? '--env2' : '--env1'] = `var(--t-${(def(env).types || ['wit'])[0]})`;
-          const box = h('div', { class: `lane-env ${i ? 'right' : 'left'}${env ? ' filled' : ''}`, dataset: { drop: k },
-            title: env ? null : `Drop an Environment here (${Game.ENV_LABEL[k]})` },
+          // An Environment waiting on the chain shows where it's headed.
+          const coming = (s.chain || []).filter(it => it.dest === k && it.kind === 'play').pop();
+          const box = h('div', { class: `lane-env ${i ? 'right' : 'left'}${env ? ' filled' : ''}${coming ? ' incoming' : ''}`, dataset: { drop: k },
+            title: coming ? `${def(s.cards[coming.iid]).name} is coming here (on the chain)` : env ? null : `Drop an Environment here (${Game.ENV_LABEL[k]})` },
             h('span', { class: 'env-label' }, l === 'race' ? `Env · ${i ? 'Lane 2' : 'Lane 1'}` : 'Environment'),
-            env ? cardEl(env) : h('div', { class: 'env-empty', 'aria-hidden': 'true' }, '☁'));
+            env ? cardEl(env) : h('div', { class: 'env-empty', 'aria-hidden': 'true' }, '☁'),
+            coming ? h('span', { class: 'env-incoming', role: 'status' }, `▼ ${def(s.cards[coming.iid]).name}${env ? ' (replaces)' : ''}`) : null);
           bindDrop(box, null);
           return box;
         });
@@ -394,8 +424,8 @@ window.Table = (() => {
   function mightOf(c) {
     if (c.faceDown && c.owner !== me()) return 0;
     const d = def(c);
-    if (!Cards.hasMight(d)) return c.might || 0;
-    return Number(d.might) + (c.might || 0);
+    if (!Cards.hasMight(d)) return (c.might || 0) + (c.tmp || 0);
+    return Number(d.might) + (c.might || 0) + (c.tmp || 0);
   }
 
   function cardEl(c) {
@@ -420,8 +450,9 @@ window.Table = (() => {
     const canDrag = canMove(c);
     const kids = Game.attachmentsOf(s, c.iid).map(k => s.cards[k]).filter(k => k.zone === c.zone);
     const prevEx = ui.prevEx.get(c.iid);
-    const animate = prevEx !== undefined && prevEx !== c.exhausted && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const shownEx = animate ? prevEx : c.exhausted;
+    const nowEx = Game.shownExhausted(c, me());
+    const animate = prevEx !== undefined && prevEx !== nowEx && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const shownEx = animate ? prevEx : nowEx;
     const slot = h('div', {
       class: ['slot', shownEx ? 'ex' : '', c.faceDown ? 'fd' : '', newPing ? 'pinged' : '',
         ui.pick && ui.pick.iid === c.iid ? 'picking-src' : '', d.card_type === 'star' ? 'is-star' : ''].filter(Boolean).join(' '),
@@ -429,7 +460,7 @@ window.Table = (() => {
       draggable: canDrag ? 'true' : null,
       tabindex: '0',
       role: 'button',
-      'aria-label': hidden ? 'Hidden card' : `${d.name}${c.exhausted ? ', exhausted' : ''}${c.dmg ? ', ' + c.dmg + ' damage' : ''}`,
+      'aria-label': hidden ? 'Hidden card' : `${d.name}${nowEx ? ', exhausted' : ''}${c.dmg ? ', ' + c.dmg + ' damage' : ''}${c.tmp ? `, ${c.tmp > 0 ? '+' : ''}${c.tmp} temporary might` : ''}`,
       on: {
         click: e => {
           e.stopPropagation();
@@ -455,10 +486,12 @@ window.Table = (() => {
     },
       h('div', { class: 'slot-inner' }, face),
       c.dmg ? h('span', { class: 'dmg', title: 'Damage' }, c.dmg) : null,
-      c.faceDown && !hidden ? h('span', { class: 'tag' }, 'Face-down') : null,
+      c.tmp ? h('span', { class: 'tmp-might ' + (c.tmp > 0 ? 'up' : 'down'), title: 'Temporary might (until the next Ramp)' }, (c.tmp > 0 ? '+' : '') + c.tmp) : null,
+      c.faceDown && !hidden ? h('span', { class: 'tag' }, c.paid ? `Face-down · paid ${c.paid.energy}${c.paid.power ? '+' + c.paid.power + 'P' : ''}` : 'Face-down') : null,
+      c.mask && c.owner === me() ? h('span', { class: 'tag reserved', title: 'Paid for a face-down card. Your opponent sees this when it is revealed.' }, c.mask.recycle ? 'Recycles on reveal' : 'Hidden cost') : null,
       c.conjured && !hidden ? h('span', { class: 'tag conj' }, 'Conjured') : null,
       kids.length ? h('div', { class: 'attached' }, kids.map(k => cardEl(k))) : null);
-    if (animate) ui.anims.push({ el: slot, to: c.exhausted });
+    if (animate) ui.anims.push({ el: slot, to: nowEx });
     return slot;
   }
 
@@ -493,7 +526,7 @@ window.Table = (() => {
       }
       if (c.zone === (Game.LANES.includes(dest) ? 'lane:' + dest : `${c.owner}:${dest}`)) return;
       // From your hand onto the table = playing it (goes on the chain).
-      const fromHand = Game.zoneKind(c.zone) === 'hand' && c.owner === me();
+      const fromHand = ['hand', 'champion'].includes(Game.zoneKind(c.zone)) && c.owner === me();
       const isEnv = Cards.isEnvironment(def(c));
       if (Game.ENV_SLOTS.includes(dest) && !isEnv) return U.toast('Only Environment cards go in the environment slot.', 'error');
       // An environment dropped on a mini lane goes into that lane's environment slot.
@@ -514,7 +547,7 @@ window.Table = (() => {
     const hidden = Game.isHidden(s, c, me()) && !(c.faceDown && mine);
     if (!hidden) showInspect(c);
     if (!mine) { act('ping', c.iid); return; }
-    if (kind === 'hand') { openMenu(c, anchor); return; }
+    if (kind === 'hand' || kind === 'champion') { openMenu(c, anchor); return; }
     act('toggleExhaust', c.iid);
   }
 
@@ -557,40 +590,58 @@ window.Table = (() => {
       return items;
     }
 
-    if (kind === 'hand') {
-      if (!mine) return [{ label: 'This is in their hand.', fn: null }];
-      const isTrick = d.card_type === 'trick';
-      if (Cards.isEnvironment(d)) {
+    if (kind === 'hand' || kind === 'champion') {
+      if (!mine) return [{ label: kind === 'hand' ? 'This is in their hand.' : 'Their Champion (not played yet).', fn: null }];
+      const isEnv = Cards.isEnvironment(d);
+      const isTrick = d.card_type === 'trick' && !isEnv;
+      const kws = d.keywords || [];
+      if (isEnv) {
         for (const k of Game.ENV_SLOTS) {
           const cur = zoneCards(k)[0];
           it(`Set environment: ${Game.ENV_LABEL[k]}${cur ? ` (replaces ${def(cur).name})` : ''}`, () => act('play', c.iid, k), 'env');
         }
         sep();
       }
-      if (isTrick) it('Cast (to the chain)', () => act('play', c.iid, 'trash'));
-      it('Play to base', () => act('play', c.iid, 'base'));
-      it('Play to Mini lane 1', () => act('play', c.iid, 'mini0'), 'needs-ramp');
-      it('Play to Mini lane 2', () => act('play', c.iid, 'mini1'), 'needs-ramp');
-      it('Play to Race lane', () => act('play', c.iid, 'race'), 'needs-race');
-      it('Play face-down to a lane…', () => faceDownMenu(c));
-      it('Attach to a card…', () => { ui.pick = { kind: 'attach', iid: c.iid }; draw(); });
+      if (isTrick) {
+        // Spells go on the chain, then to the trash. Duel cards work any time too.
+        it(kws.includes('duel') ? 'Cast (to the chain) · Duel' : 'Cast (to the chain)', () => act('play', c.iid, 'trash'));
+        if (kws.includes('in-the-shadows')) it('Play face-down to a lane…', () => faceDownMenu(c));
+        if (kws.includes('friendship')) it('Attach to a card…', () => { ui.pick = { kind: 'attach', iid: c.iid }; draw(); });
+      } else if (!isEnv) {
+        it('Play to base', () => act('play', c.iid, 'base'));
+        it('Play to Mini lane 1', () => act('play', c.iid, 'mini0'), 'needs-ramp');
+        it('Play to Mini lane 2', () => act('play', c.iid, 'mini1'), 'needs-ramp');
+        it('Play to Race lane', () => act('play', c.iid, 'race'), 'needs-race');
+        it('Play face-down to a lane…', () => faceDownMenu(c));
+        it('Attach to a card…', () => { ui.pick = { kind: 'attach', iid: c.iid }; draw(); });
+      }
       sep();
-      if (!isTrick) it('Cast / discard (to trash)', () => act('play', c.iid, 'trash'));
-      it('Top of deck', () => act('move', c.iid, 'deck-top'));
-      it('Bottom of deck', () => act('move', c.iid, 'deck-bottom'));
-      it('Give to opponent', () => act('give', c.iid));
+      if (kind === 'hand') {
+        if (!isTrick) it('Discard (to trash)', () => act('move', c.iid, 'trash'));
+        else it('Discard (to trash, without casting)', () => act('move', c.iid, 'trash'));
+        it('Top of deck', () => act('move', c.iid, 'deck-top'));
+        it('Bottom of deck', () => act('move', c.iid, 'deck-bottom'));
+        it('Give to opponent', () => act('give', c.iid));
+      } else {
+        it('To hand', () => act('move', c.iid, 'hand'));
+      }
+      it('Banish (out of the game)', () => act('banish', c.iid), 'danger');
       const cjh = conjureItem(c);
       if (cjh) { sep(); items.push(cjh); }
-      return items.filter(x => !x || x.cls !== 'needs-ramp' && x.cls !== 'needs-race' || (x.cls === 'needs-ramp' ? s.phase === 'ramp' : s.phase === 'race'));
+      return items.filter(x => !x || x.cls !== 'needs-ramp' && x.cls !== 'needs-race' || (x.cls === 'needs-ramp' ? s.phase !== 'race' : s.phase === 'race'));
     }
 
     // on the board
     it(c.exhausted ? 'Ready' : 'Exhaust', () => act('toggleExhaust', c.iid));
     if (Cards.hasMight(d) || d.card_type === 'uma' || d.card_type === 'superhorse') {
-      items.push({ counter: 'Might', minus: () => act('might', c.iid, -1), plus: () => act('might', c.iid, 1) });
+      const base = Cards.hasMight(d) ? Number(d.might) : 0;
+      items.push({ counter: 'Might', value: `${base + (c.might || 0)}${c.might ? ` (${c.might > 0 ? '+' : ''}${c.might})` : ''}`,
+        minus: () => actKeep('might', c.iid, -1), plus: () => actKeep('might', c.iid, 1) });
+      items.push({ counter: 'Temp might', value: c.tmp ? (c.tmp > 0 ? '+' : '') + c.tmp : '0', hint: 'Until the next Ramp',
+        minus: () => actKeep('tempMight', c.iid, -1), plus: () => actKeep('tempMight', c.iid, 1) });
     }
-    items.push({ counter: 'Damage', minus: () => act('damage', c.iid, -1), plus: () => act('damage', c.iid, 1) });
-    if (c.dmg || c.might) it('Clear counters', () => act('clearCounters', c.iid));
+    items.push({ counter: 'Damage', value: String(c.dmg || 0), minus: () => actKeep('damage', c.iid, -1), plus: () => actKeep('damage', c.iid, 1) });
+    if (c.dmg || c.might || c.tmp) it('Clear counters', () => act('clearCounters', c.iid));
     if (!mine) it('Ping', () => act('ping', c.iid));
     if (G().USE_CHAIN !== false) it('Use ability (to the chain)', () => act('ability', c.iid));
     it('Target another card…', () => { ui.pick = { kind: 'target', iid: c.iid }; draw(); });
@@ -602,6 +653,7 @@ window.Table = (() => {
       it(`Move to ${Game.ENV_LABEL[other]}`, () => act('move', c.iid, other));
       it('Return to hand', () => act('move', c.iid, 'hand'));
       it('Trash', () => act('trash', c.iid), 'danger');
+      it('Banish (out of the game)', () => act('banish', c.iid), 'danger');
       return items;
     }
     if (kind !== 'leader') {
@@ -614,11 +666,19 @@ window.Table = (() => {
       else it('Attach to a card…', () => { ui.pick = { kind: 'attach', iid: c.iid }; draw(); });
       sep();
       it('Return to hand', () => act('move', c.iid, 'hand'));
+      if (c.champion) it('Return to Champion zone', () => act('move', c.iid, 'champion'));
       it('Top of deck', () => act('move', c.iid, 'deck-top'));
       it('Trash', () => act('trash', c.iid), 'danger');
+      it('Banish (out of the game)', () => act('banish', c.iid), 'danger');
       it('Give to opponent', () => act('give', c.iid));
     }
     return items;
+  }
+
+  // Counter buttons keep the menu open (and update it in place).
+  function actKeep(name, ...args) {
+    ui.keepMenu = true;
+    act(name, ...args);
   }
 
   // ---------- Conjure ----------
@@ -642,12 +702,15 @@ window.Table = (() => {
   function faceDownMenu(c) {
     const s = S();
     const lanes = s.phase === 'race' ? ['race'] : ['mini0', 'mini1'];
+    const d = def(c);
+    const pay = h('input', { type: 'checkbox', id: 'fd-pay', checked: true });
     const m = U.modal('Play face-down', h('div', { class: 'stack' },
-      h('p', { class: 'muted' }, 'For In the Shadows cards. Your opponent sees only the card back until you reveal it.'),
-      h('div', { class: 'row' }, lanes.map(l => h('button', { class: 'btn', on: { click: () => { m.close(); act('play', c.iid, l, { faceDown: true }); } } }, Game.LANE_LABEL[l])))));
+      h('label', { class: 'check', for: 'fd-pay' }, pay, `Pay its cost automatically (${d.energy || 0} energy${d.power ? `, ${d.power} power` : ''})`),
+      h('p', { class: 'muted' }, 'For In the Shadows cards. Its cost is paid automatically from your Stars, but your opponent only sees the card back (and your Stars as they were) until it\'s revealed. Face-down cards are revealed when the next Tricks step starts.'),
+      h('div', { class: 'row' }, lanes.map(l => h('button', { class: 'btn', on: { click: () => { m.close(); act('play', c.iid, l, { faceDown: true, noPay: !pay.checked }); } } }, Game.LANE_LABEL[l])))));
   }
 
-  function openMenu(c, anchor, custom) {
+  function openMenu(c, anchor, custom, at) {
     closeMenu();
     hidePeek();
     const items = custom || menuItems(c);
@@ -656,40 +719,95 @@ window.Table = (() => {
       h('div', { class: 'card-menu-title' }, hidden ? 'Hidden card' : def(c).name),
       items.map(x => {
         if (!x) return h('hr');
-        if (x.counter) return h('div', { class: 'counter-row' },
-          h('span', null, x.counter),
-          h('button', { class: 'icon-btn sm', 'aria-label': x.counter + ' minus 1', on: { click: e => { e.stopPropagation(); x.minus(); } } }, '−'),
-          h('button', { class: 'icon-btn sm', 'aria-label': x.counter + ' plus 1', on: { click: e => { e.stopPropagation(); x.plus(); } } }, '+'));
+        if (x.counter) return h('div', { class: 'counter-row', title: x.hint || null },
+          h('span', null, x.counter, x.hint ? h('small', null, x.hint) : null),
+          h('button', { class: 'icon-btn sm', 'aria-label': x.counter + ' minus 1', dataset: { k: x.counter + '-' }, on: { click: e => { e.stopPropagation(); x.minus(); } } }, '−'),
+          h('span', { class: 'counter-val', 'aria-live': 'polite' }, x.value ?? ''),
+          h('button', { class: 'icon-btn sm', 'aria-label': x.counter + ' plus 1', dataset: { k: x.counter + '+' }, on: { click: e => { e.stopPropagation(); x.plus(); } } }, '+'));
         if (!x.fn) return h('div', { class: 'muted menu-note' }, x.label);
         return h('button', { class: 'menu-item' + (x.cls === 'danger' ? ' danger' : '') + (x.cls === 'conjure' ? ' conjure' : '') + (x.cls === 'env' ? ' env' : ''), role: 'menuitem', on: { click: e => { e.stopPropagation(); closeMenu(); x.fn(); } } }, x.label);
       }));
     document.body.append(menu);
-    const r = anchor.getBoundingClientRect();
     const mw = menu.offsetWidth, mh = menu.offsetHeight;
-    let left = r.right + 8, top = r.top;
-    if (left + mw > window.innerWidth - 8) left = Math.max(8, r.left - mw - 8);
+    let left, top;
+    if (at) ({ left, top } = at);
+    else {
+      const r = anchor.getBoundingClientRect();
+      left = r.right + 8; top = r.top;
+      if (left + mw > window.innerWidth - 8) left = Math.max(8, r.left - mw - 8);
+    }
     if (top + mh > window.innerHeight - 8) top = Math.max(8, window.innerHeight - mh - 8);
     menu.style.left = left + 'px';
     menu.style.top = top + 'px';
     ui.menu = menu;
+    ui.menuFor = custom ? null : { iid: c.iid, left, top };
     setTimeout(() => document.addEventListener('click', closeMenuOnOutside), 0);
     const first = menu.querySelector('button');
-    if (first) first.focus({ preventScroll: true });
+    if (first && !at) first.focus({ preventScroll: true });
+  }
+
+  // Re-draw the open card menu (same place) after a counter changed.
+  function refreshMenu() {
+    if (!ui || !ui.menu || !ui.menuFor) return;
+    const { iid, left, top } = ui.menuFor;
+    const c = S().cards[iid];
+    const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.k : null;
+    if (!c) { closeMenu(); return; }
+    openMenu(c, null, null, { left, top });
+    if (focused) { const b = ui.menu.querySelector(`[data-k="${CSS.escape(focused)}"]`); if (b) b.focus({ preventScroll: true }); }
   }
   function closeMenuOnOutside(e) { if (ui && ui.menu && !ui.menu.contains(e.target)) closeMenu(); }
   function closeMenu() {
     document.removeEventListener('click', closeMenuOnOutside);
-    if (ui && ui.menu) { ui.menu.remove(); ui.menu = null; }
+    if (ui && ui.menu) { ui.menu.remove(); ui.menu = null; ui.menuFor = null; }
   }
 
   // ---------- piles ----------
   function deckMenu(pid) {
+    const lookN = h('input', { id: 'look-n', type: 'number', min: 1, max: 20, step: 1, value: 3 });
     const m = U.modal('Your deck', h('div', { class: 'stack' },
       h('p', { class: 'muted' }, `${(S().zones[pid + ':deck'] || []).length} cards left.`),
       h('div', { class: 'row wrap' },
         h('button', { class: 'btn', on: { click: () => { m.close(); act('draw', 1); } } }, 'Draw 1'),
         h('button', { class: 'btn', on: { click: () => { m.close(); act('shuffleDeck'); } } }, 'Shuffle'),
-        h('button', { class: 'btn', on: { click: () => { m.close(); searchDeck(pid); } } }, 'Look through deck…'))));
+        h('button', { class: 'btn', on: { click: () => { m.close(); searchDeck(pid); } } }, 'Look through deck…')),
+      h('div', { class: 'row wrap look-top' },
+        h('label', { for: 'look-n' }, 'Look at the top'), lookN, h('span', null, 'cards'),
+        h('button', { class: 'btn primary', on: { click: () => { m.close(); lookTop(pid, Math.max(1, Math.min(20, Number(lookN.value) || 3))); } } }, 'Look'))));
+    lookN.focus();
+  }
+
+  // Look at the top N cards: move each one, or leave it. The window stays
+  // open until you're done, so you can sort through them one by one.
+  function lookTop(pid, n) {
+    const s = S();
+    const ids = (s.zones[pid + ':deck'] || []).slice(0, n);
+    if (!ids.length) { U.toast('Your deck is empty.', 'error'); return; }
+    act('note', `looked at the top ${ids.length} card${ids.length > 1 ? 's' : ''} of their deck`);
+    const body = h('div', { class: 'stack' });
+    const drawList = () => {
+      const st = S();
+      const deck = st.zones[pid + ':deck'] || [];
+      const left = deck.filter(iid => ids.includes(iid));
+      const mv = (iid, dest) => () => { (dest === 'banish' ? act('banish', iid) : act('move', iid, dest)); drawList(); };
+      body.replaceChildren(
+        h('p', { class: 'muted' }, left.length ? 'Top of the deck first. Use "To top" to put cards back in the order you want (the last one you send ends up on top).' : 'Done: all of them were moved.'),
+        h('div', { class: 'pile-list' }, left.map(iid => {
+          const c = st.cards[iid];
+          return h('div', { class: 'pile-item' },
+            h('span', { class: 'pile-pos' }, '#' + (deck.indexOf(iid) + 1)),
+            Cards.render(def(c), { size: 's' }),
+            h('div', { class: 'stack tight' },
+              h('button', { class: 'btn sm', on: { click: mv(iid, 'hand') } }, 'To hand'),
+              h('button', { class: 'btn sm ghost', on: { click: mv(iid, 'deck-top') } }, 'To top'),
+              h('button', { class: 'btn sm ghost', on: { click: mv(iid, 'deck-bottom') } }, 'To bottom'),
+              h('button', { class: 'btn sm ghost', on: { click: mv(iid, 'trash') } }, 'Trash'),
+              h('button', { class: 'btn sm ghost danger', on: { click: mv(iid, 'banish') } }, 'Banish')));
+        })),
+        h('div', { class: 'row end' }, h('button', { class: 'btn primary', on: { click: () => m.close() } }, 'Done')));
+    };
+    const m = U.modal(`Top ${ids.length} of your deck`, body, { wide: true });
+    drawList();
   }
 
   function searchDeck(pid) {
@@ -701,14 +819,15 @@ window.Table = (() => {
       h('div', { class: 'stack tight' },
         h('button', { class: 'btn sm', on: { click: () => { m.close(); act('move', c.iid, 'hand'); } } }, 'To hand'),
         h('button', { class: 'btn sm ghost', on: { click: () => { m.close(); act('move', c.iid, 'trash'); } } }, 'Trash'),
-        h('button', { class: 'btn sm ghost', on: { click: () => { m.close(); act('move', c.iid, 'deck-bottom'); } } }, 'Bottom'))))), { wide: true });
+        h('button', { class: 'btn sm ghost', on: { click: () => { m.close(); act('move', c.iid, 'deck-bottom'); } } }, 'Bottom'),
+        h('button', { class: 'btn sm ghost danger', on: { click: () => { m.close(); act('banish', c.iid); } } }, 'Banish'))))), { wide: true });
   }
 
   // Trash: just the cards. Right-click (or long-press) one for its options,
   // including Conjure for spells that have already resolved.
-  function trashModal(pid) {
+  function trashModal(pid, zone = 'trash') {
     const s = S();
-    const list = (s.zones[pid + ':trash'] || []).map(iid => s.cards[iid]).reverse();
+    const list = (s.zones[pid + ':' + zone] || []).map(iid => s.cards[iid]).reverse();
     const mine = pid === me();
     let m;
     const options = (c, anchor) => {
@@ -719,6 +838,8 @@ window.Table = (() => {
         { label: 'To base', fn: close(() => act('move', c.iid, 'base')) },
         { label: 'Top of deck', fn: close(() => act('move', c.iid, 'deck-top')) },
         { label: 'Bottom of deck', fn: close(() => act('move', c.iid, 'deck-bottom')) },
+        zone === 'trash' ? { label: 'Banish (out of the game)', fn: close(() => act('banish', c.iid)), cls: 'danger' }
+          : { label: 'To trash', fn: close(() => act('move', c.iid, 'trash')) },
       ];
       const cj = conjureItem(c);
       if (cj) items.push(null, { ...cj, fn: close(cj.fn) });
@@ -741,7 +862,7 @@ window.Table = (() => {
       }, Cards.render(def(c), { size: 's' }));
       return el;
     })) : h('p', { class: 'muted' }, 'Empty.');
-    m = U.modal(`${Game.nameOf(s, pid)}'s trash · ${list.length}`, [
+    m = U.modal(`${Game.nameOf(s, pid)}'s ${zone === 'trash' ? 'trash' : 'banished cards'} · ${list.length}`, [
       grid,
       list.length && mine ? h('p', { class: 'hint' }, 'Right-click a card (long-press on touch) for its options. Cards that can Conjure are marked ✦.') : null,
     ], { wide: true, onClose: () => { hidePeek(); closeMenu(); } });
@@ -807,6 +928,10 @@ window.Table = (() => {
     const s = S();
     const my = me();
     const t = Game.rampText(s);
+    if (s.phase === 'mulligan') {
+      const done = s.mulligan && s.mulligan[my];
+      return { kind: done ? 'theirs' : 'mine', big: 'Mulligan', chip: done ? 'Mulligan · waiting' : 'Mulligan · your choice', sub: t.hint };
+    }
     if (s.chain && s.chain.length) {
       const top = s.chain[s.chain.length - 1];
       const topName = def(s.cards[top.iid]).name;
@@ -817,7 +942,12 @@ window.Table = (() => {
       return { kind: 'theirs', big: `${nm}'s call`, chip: `Chain · ${nm}'s call`, sub: `${sub}. Waiting for ${nm} to respond or resolve.` };
     }
     if (s.phase === 'race') return { kind: 'both', big: 'Race!', chip: 'Race · both players', sub: t.hint };
-    if (s.step >= 3) return { kind: 'both', big: 'End of Ramp', chip: 'End of Ramp · both players', sub: t.hint };
+    if (s.step >= 3) {
+      const f = s.fight || {};
+      if (f.result === 'fight') return { kind: 'both', big: 'Fight!', chip: 'Mini-lane fight', sub: 'Both chose to fight. Fight it out in the mini lanes, then press Continue.' };
+      if (f.result) return { kind: 'both', big: 'No fight', chip: 'Fight check · done', sub: 'Someone refused. Press Continue to move on.' };
+      return { kind: 'both', big: 'Fight?', chip: 'Fight check · both players', sub: t.hint };
+    }
     if (t.who === my) return { kind: 'mine', big: 'Your turn', chip: `Your turn · ${t.short}`, sub: t.hint };
     const nm = Game.nameOf(s, t.who);
     return { kind: 'theirs', big: `${nm}'s turn`, chip: `${nm}'s turn · ${t.short}`, sub: t.hint };
@@ -837,7 +967,7 @@ window.Table = (() => {
         h('span', { class: 'hud-name' }, p.name),
         h('span', { class: 'hud-fans' }, h('strong', null, p.fans), ` / ${G().FANS_TO_WIN} fans`),
         side === 'opp' ? h('span', { class: 'hud-hand' }, `${(s.zones[pid + ':hand'] || []).length} in hand · ${(s.zones[pid + ':deck'] || []).length} in deck`) : null,
-        h('span', { class: 'hud-meter' }, h('span', { style: { width: Math.min(100, (p.fans / G().FANS_TO_WIN) * 100) + '%' } })));
+        h('span', { class: 'hud-meter' }, h('span', { style: { width: Math.max(0, Math.min(100, (p.fans / G().FANS_TO_WIN) * 100)) + '%' } })));
     };
 
     // group labels (Ramp 1, Ramp 2, End, Race) span their segments
@@ -857,26 +987,39 @@ window.Table = (() => {
 
     // the main action(s) for this moment
     const actions = [];
+    // The chain doesn't stop the turn: Resolve sits next to the turn buttons.
     if (s.chain && s.chain.length) {
       const myCall = !s.priority || s.priority === my;
       actions.push(h('button', { class: 'btn ' + (myCall ? 'primary' : 'ghost'), disabled: !myCall, on: { click: () => act('resolve') } },
         myCall ? h('span', null, 'Resolve ', h('kbd', null, 'S')) : `Waiting for ${Game.nameOf(s, s.priority)}`));
+    }
+    const chainOpen = s.chain && s.chain.length;
+    if (s.phase === 'mulligan') {
+      const done = s.mulligan[my];
+      if (done) actions.push(h('span', { class: 'fight-note calm' }, done === 'keep' ? 'Kept · ' : 'Mulliganed · ', `waiting for ${Game.nameOf(s, op)}`));
+      else actions.push(h('span', { class: 'fight-note calm' }, 'See the middle of the table'));
     } else if (s.phase === 'ramp' && s.step < 3) {
       const t = Game.rampText(s);
-      actions.push(h('button', { class: 'btn ' + (t.who === my ? 'primary' : 'ghost'), on: { click: () => act('nextStep') }, title: t.who === my ? 'Space' : null },
+      actions.push(h('button', { class: 'btn ' + (t.who === my && !chainOpen ? 'primary' : 'ghost'), on: { click: () => act('nextStep') }, title: t.who === my ? 'Space' : null },
         t.who === my ? h('span', null, 'Pass ', h('kbd', null, 'Space')) : `Pass for ${Game.nameOf(s, t.who)}`));
     } else if (s.phase === 'ramp') {
-      const agreeMe = s.players[my].agreeFight, agreeOp = s.players[op].agreeFight;
-      if (s.miniFight) {
-        actions.push(h('span', { class: 'fight-note' }, 'Mini-lane fight!'));
-        actions.push(h('button', { class: 'btn', on: { click: () => act('endMiniFight') } }, 'End fight'));
-      } else if (agreeMe && agreeOp) {
-        actions.push(h('button', { class: 'btn fight', on: { click: () => act('startMiniFight') } }, 'Fight in mini lanes'));
+      const f = s.fight || { choices: {} };
+      const last = s.ramp >= Game.RAMPS();
+      const next = last ? 'Begin Race →' : `Ramp ${s.ramp + 1} →`;
+      if (!f.result) {
+        const mine = f.choices[my];
+        const theirs = !!f.choices[op];
+        if (!mine) {
+          actions.push(h('button', { class: 'btn fight', on: { click: () => act('fightChoice', 'fight') } }, 'Fight'));
+          actions.push(h('button', { class: 'btn', title: `You lose ${G().REFUSE_FIGHT_FANS ?? 50} fans`, on: { click: () => act('fightChoice', 'refuse') } }, `Refuse (−${G().REFUSE_FIGHT_FANS ?? 50} fans)`));
+        } else {
+          actions.push(h('span', { class: 'fight-note calm' }, `You chose ${mine === 'fight' ? 'Fight' : 'Refuse'} · ${Game.nameOf(s, op)} ${theirs ? 'has chosen' : 'is choosing…'}`));
+        }
+        if (!mine) actions.push(h('span', { class: 'fight-note calm' }, `${Game.nameOf(s, op)} ${theirs ? 'has chosen' : 'is choosing…'}`));
       } else {
-        actions.push(h('button', { class: 'btn' + (agreeMe ? ' on' : ''), 'aria-pressed': String(agreeMe), title: `${Game.nameOf(s, op)}: ${agreeOp ? 'agreed' : 'not yet'}`, on: { click: () => act('agreeFight') } },
-          agreeMe ? '✓ Agreed to fight' : `Agree to fight${agreeOp ? ' (they agreed)' : ''}`));
+        if (f.result === 'fight') actions.push(h('span', { class: 'fight-note' }, 'Mini-lane fight!'));
+        actions.push(h('button', { class: 'btn primary', on: { click: () => act('continueOn') } }, next));
       }
-      actions.push(h('button', { class: 'btn primary', on: { click: () => act('startRace') } }, 'Begin Race →'));
     } else {
       actions.push(h('button', { class: 'btn primary', on: { click: () => act('endRace') } }, 'End Race →'));
     }
@@ -910,7 +1053,7 @@ window.Table = (() => {
     const op = Game.opp(s, my);
     const hotseat = ui.hotseat ? h('div', { class: 'hotseat' },
       h('span', { class: 'eyebrow' }, 'Viewing as'),
-      h('div', { class: 'seg' }, s.order.map(pid => h('button', { class: 'seg-btn' + (pid === my ? ' on' : ''), on: { click: () => { ui.viewAs = pid; closeMenu(); draw(); } } }, Game.nameOf(s, pid))))) : null;
+      h('div', { class: 'seg' }, s.order.map(pid => h('button', { class: 'seg-btn' + (pid === my ? ' on' : ''), on: { click: () => { ui.viewAs = pid; ui.prevEx = new Map(); closeMenu(); draw(); } } }, Game.nameOf(s, pid))))) : null;
 
     const canUndo = s.undo && s.undo.by === my;
     const chain = chainEl();
@@ -963,7 +1106,11 @@ window.Table = (() => {
       const d = def(c);
       return d.card_type === 'star' ? Cards.renderStar(d.types[0], size === 'l' ? 'm' : 's') : Cards.render(d, { size });
     };
-    const menuFor = it => e => { e.preventDefault(); e.stopPropagation(); chainMenu(it, e.currentTarget); };
+    const menuFor = it => e => {
+      e.preventDefault(); e.stopPropagation();
+      if (ui.pick && s.cards[it.iid]) { finishPick(s.cards[it.iid]); return; }
+      chainMenu(it, e.currentTarget);
+    };
     return h('section', { class: 'chain-box' + (myCall ? ' my-call' : '') },
       h('div', { class: 'chain-head' },
         h('h3', null, `Chain · ${s.chain.length}`),
@@ -972,13 +1119,13 @@ window.Table = (() => {
         ? 'Respond with a Reaction from your hand (it goes on top), or resolve the top card.'
         : `Waiting for ${caller} to respond or resolve.`),
       h('button', { class: 'btn primary chain-resolve', disabled: !myCall, on: { click: () => act('resolve') } }, 'Resolve top ', h('kbd', null, 'S')),
-      h('div', { class: 'chain-top ' + (top.by === my ? 'mine' : 'theirs') + (isNew(top) ? ' enter' : ''), title: 'Click for options', on: { click: menuFor(top), contextmenu: menuFor(top) } },
+      h('div', { class: 'chain-top ' + (top.by === my ? 'mine' : 'theirs') + (isNew(top) ? ' enter' : ''), title: 'Click for options', dataset: { chainIid: top.iid }, on: { click: menuFor(top), contextmenu: menuFor(top) } },
         h('span', { class: 'chain-tag' }, top.kind === 'ability' ? 'Ability · resolves first' : 'Resolves first'),
         cardOf(top, 'l'),
         h('span', { class: 'chain-who' }, `${who(top)} · ${Game.chainDestText(s, top)}`)),
       s.chain.length > 1 ? h('ol', { class: 'chain-list', 'aria-label': 'Rest of the chain, next to resolve first' },
         s.chain.slice(0, -1).reverse().map((it, i) => h('li', {
-          class: (it.by === my ? 'mine' : 'theirs') + (isNew(it) ? ' enter' : ''), title: 'Click for options',
+          class: (it.by === my ? 'mine' : 'theirs') + (isNew(it) ? ' enter' : ''), title: 'Click for options', dataset: { chainIid: it.iid },
           on: { click: menuFor(it), contextmenu: menuFor(it) },
         },
           h('span', { class: 'chain-num' }, i + 2),
@@ -995,6 +1142,8 @@ window.Table = (() => {
     if (it.by === me() && it.n === top.n) items.push({ label: 'Take it back', fn: () => act('takeBack', it.n) });
     items.push({ label: it.kind === 'ability' ? 'Counter this ability' : 'Counter (send to trash)', fn: () => act('counter', it.n), cls: 'danger' });
     if (it.n === top.n && s.priority && s.priority !== me()) items.push({ label: `Resolve anyway (skip ${Game.nameOf(s, s.priority)}'s call)`, fn: () => act('resolve', true) });
+    if (it.by === me()) items.push({ label: 'Target a card… (arrow)', fn: () => { ui.pick = { kind: 'target', iid: it.iid }; draw(); } });
+    items.push({ label: 'Banish (out of the game)', fn: () => act('banish', it.iid), cls: 'danger' });
     openMenu(s.cards[it.iid], anchor, items);
   }
 
@@ -1006,8 +1155,9 @@ window.Table = (() => {
     if (d.card_type === 'star') return;
     const notes = [];
     if (c.might) notes.push(`Might ${c.might > 0 ? '+' : ''}${c.might} (now ${Number(d.might || 0) + c.might})`);
+    if (c.tmp) notes.push(`Temp might ${c.tmp > 0 ? '+' : ''}${c.tmp}`);
     if (c.dmg) notes.push(`${c.dmg} damage`);
-    if (c.exhausted) notes.push('Exhausted');
+    if (Game.shownExhausted(c, me())) notes.push('Exhausted');
     if (c.faceDown) notes.push('Face-down');
     const peek = h('div', { class: 'peek', 'aria-hidden': 'true' },
       Cards.render(d, { size: 'l' }),
@@ -1044,7 +1194,7 @@ window.Table = (() => {
     const d = def(c);
     el.replaceChildren(...[
       d.card_type === 'star' ? Cards.renderStar(d.types[0], 'm') : Cards.render(d, { size: 'l' }),
-      c.dmg || c.might ? h('p', { class: 'hint' }, [c.might ? `Might ${c.might > 0 ? '+' : ''}${c.might}` : '', c.dmg ? `${c.dmg} damage` : ''].filter(Boolean).join(' · ')) : null].filter(Boolean));
+      c.dmg || c.might || c.tmp ? h('p', { class: 'hint' }, [c.might ? `Might ${c.might > 0 ? '+' : ''}${c.might}` : '', c.tmp ? `Temp might ${c.tmp > 0 ? '+' : ''}${c.tmp}` : '', c.dmg ? `${c.dmg} damage` : ''].filter(Boolean).join(' · ')) : null].filter(Boolean));
   }
 
   // ---------- arrows ----------
@@ -1054,10 +1204,12 @@ window.Table = (() => {
     const board = document.getElementById('board');
     if (!svg || !board) return;
     const s = S();
-    const br = board.getBoundingClientRect();
+    const br = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
     svg.setAttribute('viewBox', `0 0 ${br.width} ${br.height}`);
     svg.setAttribute('width', br.width);
     svg.setAttribute('height', br.height);
+    // Cards on the table first, then cards on the chain.
+    const find = iid => board.querySelector(`[data-iid="${iid}"]`) || ui.el.querySelector(`[data-chain-iid="${iid}"] .card, [data-chain-iid="${iid}"]`);
     const ns = 'http://www.w3.org/2000/svg';
     svg.replaceChildren();
     const defsEl = document.createElementNS(ns, 'defs');
@@ -1076,8 +1228,8 @@ window.Table = (() => {
     }
     svg.append(defsEl);
     for (const a of s.arrows || []) {
-      const f = board.querySelector(`[data-iid="${a.from}"]`);
-      const t = board.querySelector(`[data-iid="${a.to}"]`);
+      const f = find(a.from);
+      const t = find(a.to);
       if (!f || !t) continue;
       const fr = f.getBoundingClientRect(), tr = t.getBoundingClientRect();
       const x1 = fr.left + fr.width / 2 - br.left, y1 = fr.top + fr.height / 2 - br.top;

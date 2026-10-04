@@ -43,6 +43,9 @@ window.Cards = (() => {
   const TAG_LABEL = Object.fromEntries(TAGS.map(t => [t.id, t.label]));
   const isEnvironment = def => (def.keywords || []).includes('environment');
   const isChampion = def => def.card_type === 'uma' && !!def.subtitle;
+  const isSignature = def => !!(def && def.signature_of);
+  // Tags can be the built-in running styles or any custom word you add.
+  const tagLabel = t => TAG_LABEL[t] || t;
 
   // ---------- Conjure ----------
   // A card's conjure settings describe which pool cards it can create:
@@ -66,7 +69,7 @@ window.Cards = (() => {
     const parts = [];
     if (c.champion === 'yes') parts.push('Champion');
     if (c.colors.length) parts.push(c.colors.map(t => TYPE_LABEL[t]).join('/'));
-    if (c.tags.length) parts.push(c.tags.map(t => TAG_LABEL[t] || t).join('/'));
+    if (c.tags.length) parts.push(c.tags.map(tagLabel).join('/'));
     parts.push(c.kind === 'any' ? 'card' : (CARD_TYPE_LABEL[c.kind] || c.kind));
     let s = `${c.count > 1 ? c.count + ' random' : 'a random'} ${parts.join(' ')}${c.count > 1 ? 's' : ''}`;
     const costs = [];
@@ -83,7 +86,7 @@ window.Cards = (() => {
   // group = badge color: timing (teal), placement (pink), effect (lime).
   const KEYWORDS = [
     { id: 'reaction', label: 'Reaction!', group: 'timing', help: 'Play anytime. Can counter tricks and unit abilities.' },
-    { id: 'duel', label: 'Duel', group: 'timing', help: 'Play only in races.' },
+    { id: 'duel', label: 'Duel', group: 'timing', help: 'Strongest in races, but can also be played as a normal trick.' },
     { id: 'uma-roar', label: 'Uma-Roar', group: 'timing', help: 'Do the effect when you draw this card.' },
     { id: 'in-the-shadows', label: 'In the Shadows', group: 'timing', help: 'Played face-down. Reveal at the start of Tricks.' },
     { id: 'friendship', label: 'Friendship', group: 'place', help: 'Attach to a unit, at a cost.' },
@@ -259,13 +262,15 @@ window.Cards = (() => {
     const rar = RARITY[def.rarity] || RARITY.common;
 
     // An Uma with a subtitle is a Champion (like Riftbound's champion units).
-    const kindLabel = isToken(def) ? `Token ${CARD_TYPE_LABEL[def.card_type] || ''}`.trim() : isEnvironment(def) ? 'Environment' : isChampion(def) ? 'Champion Uma' : (CARD_TYPE_LABEL[def.card_type] || def.card_type);
-    const tagText = (def.tags || []).map(t => TAG_LABEL[t] || t).join(' · ');
+    let kindLabel = isToken(def) ? `Token ${CARD_TYPE_LABEL[def.card_type] || ''}`.trim() : isEnvironment(def) ? 'Environment' : isChampion(def) ? 'Champion Uma' : (CARD_TYPE_LABEL[def.card_type] || def.card_type);
+    // Signature cards belong to one Superhorse (max 3 per deck).
+    if (isSignature(def)) kindLabel = 'Signature ' + kindLabel;
+    const tagText = (def.tags || []).map(tagLabel).join(' · ');
     const typeText = (def.types || []).map(t => TYPE_LABEL[t]).join(' / ');
     const typeLine = [kindLabel, typeText, tagText].filter(Boolean).join(' · ');
 
     const el = h('div', {
-      class: `card sz-${size} ct-${def.card_type} r-${rar.id}${isFullArt(def) ? ' full-art' : ''}${isToken(def) ? ' is-token' : ''}`,
+      class: `card sz-${size} ct-${def.card_type} r-${rar.id}${isFullArt(def) ? ' full-art' : ''}${isToken(def) ? ' is-token' : ''}${isSignature(def) ? ' is-signature' : ''}`,
       style: typeVars(def.types),
       title: null,
     },
@@ -357,6 +362,7 @@ window.Cards = (() => {
     if ((c.effect || '').length > 500) errs.push('Effect text can be at most 500 characters.');
     if (c.rarity && !RARITY[c.rarity]) errs.push('Pick a rarity.');
     if ((c.tags || []).length > 6) errs.push('At most 6 tags.');
+    if ((c.tags || []).some(t => !String(t).trim() || String(t).length > 24)) errs.push('Tags can be 1–24 characters.');
     if (c.conjure) {
       const n = Number(c.conjure.count);
       if (!Number.isInteger(n) || n < 1 || n > 5) errs.push('Conjure count must be 1–5.');
@@ -365,5 +371,5 @@ window.Cards = (() => {
     return errs;
   }
 
-  return { TOKENS, isToken, TAGS, TAG_LABEL, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
+  return { TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
 })();

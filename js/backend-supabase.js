@@ -17,7 +17,12 @@ window.SupabaseBackend = class SupabaseBackend {
   }
 
   check({ data, error }) {
-    if (error) throw new Error(error.message);
+    if (error) {
+      if (/signature_of|champion_id/.test(error.message || '')) {
+        throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/08-champion-signature.sql, then try again.');
+      }
+      throw new Error(error.message);
+    }
     return data;
   }
 
@@ -104,6 +109,8 @@ window.SupabaseBackend = class SupabaseBackend {
       tags: card.tags || [],
       conjure: (card.keywords || []).includes('conjure') && card.conjure ? card.conjure : null,
     };
+    // Only sent when used, so older databases (before 08) keep working.
+    if (card.signature_of !== undefined) row.signature_of = card.signature_of || null;
     if (imageFile) {
       const ext = (imageFile.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
       const path = `${this.me.id}/${U.uid()}.${ext}`;
@@ -124,18 +131,28 @@ window.SupabaseBackend = class SupabaseBackend {
       keywords: c.keywords, effect: c.effect, rarity: c.rarity, full_art: c.full_art, subtitle: c.subtitle,
       tags: c.tags, conjure: c.conjure,
     }));
+    const sigOf = Object.fromEntries(samples.filter(c => c.signature_of).map(c => [c.name.toLowerCase(), samples.find(x => x.id === c.signature_of).name.toLowerCase()]));
     const added = rows.length ? this.check(await this.sb.from('cards').insert(rows).select('id,name')) : [];
     // decks: remap sample ids → real ids (by name)
     const pool = await this.listCards();
     const idByName = Object.fromEntries(pool.map(c => [c.name.toLowerCase(), c.id]));
     const nameBySample = Object.fromEntries(samples.map(c => [c.id, c.name.toLowerCase()]));
+    // Signature links (needs 08-champion-signature.sql; skipped if not run yet)
+    try {
+      for (const a of added) {
+        const of = sigOf[a.name.toLowerCase()];
+        if (of && idByName[of]) this.check(await this.sb.from('cards').update({ signature_of: idByName[of] }).eq('id', a.id));
+      }
+    } catch (e) { /* older database */ }
     const myDecks = (await this.listDecks()).filter(d => d.owner === this.me.id).map(d => d.name);
     let decks = 0;
     for (const d of DemoBackend.sampleDecks(samples)) {
       if (myDecks.includes(d.name)) continue;
       const cards = {};
       for (const [sid, n] of Object.entries(d.cards)) { const id = idByName[nameBySample[sid]]; if (id) cards[id] = n; }
-      await this.saveDeck({ name: d.name, leader_id: idByName[nameBySample[d.leader_id]] || null, cards, stars: d.stars });
+      const deck = { name: d.name, leader_id: idByName[nameBySample[d.leader_id]] || null, cards, stars: d.stars };
+      if (d.champion_id) deck.champion_id = idByName[nameBySample[d.champion_id]] || null;
+      try { await this.saveDeck(deck); } catch (e) { delete deck.champion_id; await this.saveDeck(deck); }
       decks++;
     }
     return { cards: added.length, skipped: samples.length - rows.length, decks };
@@ -156,6 +173,7 @@ window.SupabaseBackend = class SupabaseBackend {
 
   async saveDeck(deck) {
     const row = { name: deck.name, leader_id: deck.leader_id || null, cards: deck.cards, stars: deck.stars, updated_at: new Date().toISOString() };
+    if (deck.champion_id !== undefined) row.champion_id = deck.champion_id || null;
     if (deck.id) return this.check(await this.sb.from('decks').update(row).eq('id', deck.id).select().single());
     return this.check(await this.sb.from('decks').insert(row).select().single());
   }

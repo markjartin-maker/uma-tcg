@@ -100,6 +100,7 @@ create table if not exists public.cards (
   subtitle text check (char_length(subtitle) <= 40),
   tags text[] not null default '{}' check (cardinality(tags) <= 6),
   conjure jsonb,  -- Conjure filter settings (see js/cards.js)
+  signature_of uuid references public.cards on delete set null, -- Signature card of this Superhorse
   image_url text,
   created_at timestamptz not null default now(),
   -- Superhorse leaders have exactly 2 types; other cards have 1 or 2.
@@ -133,11 +134,16 @@ create table if not exists public.decks (
   owner uuid not null default auth.uid() references auth.users on delete cascade,
   name text not null check (char_length(name) between 1 and 40),
   leader_id uuid references public.cards on delete set null,
+  champion_id uuid references public.cards on delete set null, -- the deck's Champion Uma
   cards jsonb not null default '{}',
   stars jsonb not null default '{}',
   updated_at timestamptz not null default now()
 );
 alter table public.decks enable row level security;
+
+-- Columns added in later updates (safe to re-run).
+alter table public.cards add column if not exists signature_of uuid references public.cards on delete set null;
+alter table public.decks add column if not exists champion_id uuid references public.cards on delete set null;
 
 drop policy if exists "friends can see decks" on public.decks;
 create policy "friends can see decks" on public.decks
