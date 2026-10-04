@@ -184,6 +184,9 @@ window.App = (() => {
   }
 
   function afterLogin() {
+    // Challenges that were already accepted before this page loaded are old:
+    // don't jump into those matches (they're listed under "Your matches").
+    firstChallengeList = true;
     // Listen for challenges everywhere, so a challenge pops up on any screen.
     app.lobbyCleanup.push(app.backend.watchChallenges(onChallenges));
     go('play');
@@ -194,9 +197,14 @@ window.App = (() => {
   let profiles = [];
   let online = new Set();
   const seenIncoming = new Set();
+  let firstChallengeList = true;
 
   async function onChallenges(list) {
     challenges = list;
+    if (firstChallengeList) {
+      firstChallengeList = false;
+      for (const ch of list) if (ch.status === 'accepted') app.opened.add(ch.id);
+    }
     const known = id => profiles.some(p => p.id === id);
     if (!profiles.length || list.some(c => !known(c.from_user) || !known(c.to_user))) profiles = await app.backend.listProfiles();
     for (const ch of list) {

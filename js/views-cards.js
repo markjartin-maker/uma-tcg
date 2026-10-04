@@ -12,23 +12,26 @@ window.CardViews = (() => {
     const rarSel = h('select', { id: 'pool-rarity', 'aria-label': 'Rarity' },
       h('option', { value: '' }, 'All rarities'), Cards.RARITIES.map(r => h('option', { value: r.id }, r.label)));
     const kindSel = h('select', { id: 'pool-kind', 'aria-label': 'Card type' },
-      h('option', { value: '' }, 'All card types'), Cards.CARD_TYPES.map(t => h('option', { value: t.id }, t.label)));
+      h('option', { value: '' }, 'All card types'), Cards.CARD_TYPES.map(t => h('option', { value: t.id }, t.label)),
+      h('option', { value: 'token' }, 'Tokens'));
+    // Built-in tokens show under "Tokens" until someone makes a token with the same name.
+    const builtins = () => Cards.TOKENS.filter(t => !cards.some(c => Cards.isToken(c) && c.name.toLowerCase() === t.name.toLowerCase()));
     const mineOnly = h('input', { id: 'pool-mine', type: 'checkbox' });
     const grid = h('div', { class: 'card-grid' });
     const count = h('span', { class: 'muted' });
 
     function draw() {
       const q = search.value.trim().toLowerCase();
-      const list = cards.filter(c =>
+      const list = [...cards, ...(kindSel.value === 'token' ? builtins() : [])].filter(c =>
         (!q || c.name.toLowerCase().includes(q) || (c.subtitle || '').toLowerCase().includes(q) || (c.effect || '').toLowerCase().includes(q)) &&
         (!typeSel.value || c.types.includes(typeSel.value)) &&
-        (!kindSel.value || c.card_type === kindSel.value) &&
+        (!kindSel.value || (kindSel.value === 'token' ? Cards.isToken(c) : c.card_type === kindSel.value && !Cards.isToken(c))) &&
         (!rarSel.value || (c.rarity || 'common') === rarSel.value) &&
         (!mineOnly.checked || c.owner === App.me.id));
       count.textContent = `${list.length} of ${cards.length} cards`;
-      grid.replaceChildren(...list.map(c => h('button', { class: 'grid-card', on: { click: () => showCard(c, by(c.owner)) } },
+      grid.replaceChildren(...list.map(c => h('button', { class: 'grid-card', on: { click: () => showCard(c, c.token ? 'built in' : by(c.owner)) } },
         Cards.render(c, { size: 'm' }),
-        h('span', { class: 'by' }, 'by ' + by(c.owner)))));
+        h('span', { class: 'by' }, c.token ? 'built-in token' : 'by ' + by(c.owner)))));
       if (!list.length) grid.append(h('p', { class: 'muted' }, cards.length ? 'No cards match those filters.' : 'No cards yet. Make the first one in Card maker.'));
     }
     [search, typeSel, kindSel, rarSel, mineOnly].forEach(x => x.addEventListener('input', draw));
@@ -47,6 +50,7 @@ window.CardViews = (() => {
               App.go('cards');
             } catch (err) { U.toast(err.message, 'error'); btn.disabled = false; }
           } } }, 'Import sample cards') : null,
+          h('button', { class: 'btn', on: { click: () => App.go('maker', { newToken: true }) } }, 'New token'),
           h('button', { class: 'btn primary', on: { click: () => App.go('maker') } }, 'New card'))),
       h('div', { class: 'filters' }, search, typeSel, kindSel, rarSel,
         h('label', { class: 'check', for: 'pool-mine' }, mineOnly, 'Only mine')),
@@ -56,12 +60,15 @@ window.CardViews = (() => {
 
   function showCard(c, author) {
     const mine = c.owner === App.me.id || !!App.me.admin;
+    const builtin = !!c.token;
     const m = U.modal(c.name, h('div', { class: 'card-detail' },
       Cards.render(c, { size: 'l' }),
       h('div', { class: 'stack' },
-        h('p', { class: 'muted' }, 'Made by ' + author),
+        builtin ? h('p', { class: 'muted' }, 'A built-in token. Customize it to make your own version: once saved, it replaces this one in the Token… menu for new matches.')
+          : h('p', { class: 'muted' }, 'Made by ' + author),
+        builtin ? h('div', { class: 'row' }, h('button', { class: 'btn primary', on: { click: () => { m.close(); App.go('maker', { fromBuiltin: c }); } } }, 'Customize')) : null,
         (c.keywords || []).length ? h('dl', { class: 'kw-help' }, c.keywords.map(k => Cards.KEYWORD[k] ? [h('dt', null, Cards.KEYWORD[k].label), h('dd', null, Cards.KEYWORD[k].help)] : null)) : null,
-        mine ? h('div', { class: 'row' },
+        mine && !builtin ? h('div', { class: 'row' },
           h('button', { class: 'btn', on: { click: () => { m.close(); App.go('maker', c); } } }, 'Edit'),
           h('button', { class: 'btn danger', on: { click: async () => {
             if (!(await U.ask(`Delete "${c.name}" for everyone? Decks using it will lose it.`, 'Delete', true))) return;
@@ -71,12 +78,24 @@ window.CardViews = (() => {
 
   // ---------- maker ----------
   function renderMaker(el, editing) {
-    const card = editing ? U.clone(editing) : {
+    const blank = {
       name: '', card_type: 'uma', types: ['speed'], energy: 1, power: 0, might: 2, keywords: [], effect: '', image_url: null,
       rarity: 'common', full_art: false, subtitle: '', tags: [], conjure: null,
     };
+    let card;
+    if (editing && editing.fromBuiltin) {
+      // Copy of a built-in token (Racer, Carrot) that you can change and save.
+      const t = U.clone(editing.fromBuiltin);
+      card = { ...blank, ...t, is_token: true };
+      delete card.id; delete card.token;
+      editing = null;
+    } else if (editing && editing.newToken) {
+      card = { ...blank, name: '', might: 1, energy: 0, types: [], is_token: true, full_art: true };
+      editing = null;
+    } else card = editing ? U.clone(editing) : blank;
     card.tags = card.tags || [];
     card.conjure = Cards.conjureOf(card) || { ...Cards.CONJURE_DEFAULT };
+    card.conjure.keywords = card.conjure.keywords || [];
     let pool = [];
     App.backend.listCards().then(list => { pool = list; drawTags(); drawSig(); cjTags.redraw(); drawPreview(); }).catch(() => {});
     let imageFile = null;
@@ -98,7 +117,7 @@ window.CardViews = (() => {
     const kindRow = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Card type' });
     const kindHelp = h('p', { class: 'hint' });
     const drawKinds = () => {
-      kindRow.replaceChildren(...Cards.CARD_TYPES.map(t => h('button', {
+      kindRow.replaceChildren(...Cards.CARD_TYPES.filter(t => !(card.is_token && t.id === 'superhorse')).map(t => h('button', {
         type: 'button', role: 'radio', 'aria-checked': String(card.card_type === t.id),
         class: 'seg-btn' + (card.card_type === t.id ? ' on' : ''),
         on: { click: () => {
@@ -112,6 +131,15 @@ window.CardViews = (() => {
       }, t.label)));
       kindHelp.textContent = Cards.CARD_TYPES.find(t => t.id === card.card_type).help;
     };
+
+    // token: made during play (Token… button), never in decks, vanishes when it leaves play
+    const tokenCb = h('input', { id: 'mk-token', type: 'checkbox', checked: !!card.is_token, on: { change: e => {
+      card.is_token = e.target.checked;
+      if (card.is_token && card.card_type === 'superhorse') card.card_type = 'uma';
+      drawKinds(); drawTypes(); drawSig(); drawPreview();
+    } } });
+    const tokenCheck = h('label', { class: 'check', for: 'mk-token' }, tokenCb,
+      'Token: created during a match with the Token… button, never put in decks. It disappears if it leaves play.');
 
     // types
     const typeRow = h('div', { class: 'type-chips' });
@@ -130,7 +158,7 @@ window.CardViews = (() => {
           } },
         }, t.label);
       }));
-      typeHelp.textContent = card.card_type === 'superhorse'
+      typeHelp.textContent = card.is_token ? 'Tokens can have no type, one, or two.' : card.card_type === 'superhorse'
         ? 'Pick exactly two. Decks using this leader can only use cards of these types.'
         : 'Pick one, or two for a dual-type card (only fits decks whose leader has both).';
     };
@@ -190,7 +218,8 @@ window.CardViews = (() => {
       const leaders = pool.filter(c => c.card_type === 'superhorse' && c.id !== card.id);
       sigSel.replaceChildren(h('option', { value: '' }, 'Not a Signature card'),
         ...leaders.map(l => h('option', { value: l.id, selected: l.id === card.signature_of }, l.name)));
-      sigField.hidden = card.card_type === 'superhorse';
+      sigField.hidden = card.card_type === 'superhorse' || !!card.is_token;
+      if (sigField.hidden && card.signature_of) card.signature_of = null;
     }
     drawSig();
 
@@ -241,6 +270,8 @@ window.CardViews = (() => {
           sel('cj-dest', cj.dest, [['hand', 'Hand'], ['base', 'Base'], ['deck-top', 'Top of deck']], v => (cj.dest = v)))),
       h('div', { class: 'field' }, h('span', { class: 'label' }, 'Color (any of)'), chipSet(Cards.TYPES.map(t => [t.id, t.label, true]), 'colors')),
       h('div', { class: 'field' }, h('span', { class: 'label' }, 'Tags (any of)'), cjTags),
+      h('div', { class: 'field' }, h('span', { class: 'label' }, 'Keywords (any of)'),
+        chipSet(Cards.KEYWORDS.map(k => [k.id, k.label.replace(/!$/, '')]), 'keywords')),
       cjSummary);
     function drawConjure() {
       conjureBox.hidden = !card.keywords.includes('conjure');
@@ -426,7 +457,7 @@ window.CardViews = (() => {
       h('div', { class: 'field' }, h('label', { for: 'mk-name' }, 'Name'), name),
       h('div', { class: 'field' }, h('label', { for: 'mk-sub' }, 'Subtitle (optional)'), subtitle,
         h('p', { class: 'hint' }, 'Shown under the name. An Uma with a subtitle becomes a Champion Uma.')),
-      h('fieldset', null, h('legend', null, 'Card type'), kindRow, kindHelp),
+      h('fieldset', null, h('legend', null, 'Card type'), kindRow, kindHelp, tokenCheck),
       h('fieldset', null, h('legend', null, 'Types'), typeRow, typeHelp),
       h('fieldset', null, h('legend', null, 'Rarity'), rarityRow,
         h('label', { class: 'check', for: 'mk-fullart' }, fullArtCb, 'Full-art frame (the art fills the whole card)'),
@@ -446,7 +477,7 @@ window.CardViews = (() => {
         save));
 
     el.append(h('section', { class: 'page' },
-      h('div', { class: 'page-head' }, h('h1', null, editing ? 'Edit card' : 'Card maker')),
+      h('div', { class: 'page-head' }, h('h1', null, editing ? (card.is_token ? 'Edit token' : 'Edit card') : card.is_token ? 'New token' : 'Card maker')),
       h('div', { class: 'maker' }, form, h('div', { class: 'maker-side' }, h('p', { class: 'eyebrow' }, 'Preview'), preview))));
     drawKinds(); drawTypes(); drawPreview();
   }

@@ -21,6 +21,9 @@ window.SupabaseBackend = class SupabaseBackend {
       if (/signature_of|champion_id/.test(error.message || '')) {
         throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/08-champion-signature.sql, then try again.');
       }
+      if (/is_token|type_count/.test(error.message || '')) {
+        throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/09-tokens.sql, then try again.');
+      }
       throw new Error(error.message);
     }
     return data;
@@ -111,6 +114,7 @@ window.SupabaseBackend = class SupabaseBackend {
     };
     // Only sent when used, so older databases (before 08) keep working.
     if (card.signature_of !== undefined) row.signature_of = card.signature_of || null;
+    if (card.is_token !== undefined) row.is_token = !!card.is_token;
     if (imageFile) {
       const ext = (imageFile.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
       const path = `${this.me.id}/${U.uid()}.${ext}`;

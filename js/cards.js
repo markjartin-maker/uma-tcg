@@ -50,12 +50,14 @@ window.Cards = (() => {
   // ---------- Conjure ----------
   // A card's conjure settings describe which pool cards it can create:
   // { count, kind, energyOp, energy, powerOp, power, colors[], champion, tags[], dest }
-  const CONJURE_DEFAULT = { count: 1, kind: 'any', energyOp: 'any', energy: 2, powerOp: 'any', power: 1, colors: [], champion: 'any', tags: [], dest: 'hand' };
+  const CONJURE_DEFAULT = { count: 1, kind: 'any', energyOp: 'any', energy: 2, powerOp: 'any', power: 1, colors: [], champion: 'any', tags: [], keywords: [], dest: 'hand' };
   const conjureOf = def => (def && def.conjure ? { ...CONJURE_DEFAULT, ...def.conjure } : null);
   const cmp = (op, a, b) => op === 'eq' ? a === b : op === 'le' ? a <= b : op === 'ge' ? a >= b : true;
 
   function conjureMatches(defs, c) {
-    return Object.values(defs).filter(d => d && d.card_type !== 'star' && d.card_type !== 'superhorse' && !d.token &&
+    const kws = c.keywords || [];
+    return Object.values(defs).filter(d => d && d.card_type !== 'star' && d.card_type !== 'superhorse' && !isToken(d) &&
+      (!kws.length || (d.keywords || []).some(k => kws.includes(k))) &&
       (c.kind === 'any' || d.card_type === c.kind) &&
       cmp(c.energyOp, Number(d.energy || 0), Number(c.energy)) &&
       cmp(c.powerOp, Number(d.power || 0), Number(c.power)) &&
@@ -70,6 +72,7 @@ window.Cards = (() => {
     if (c.champion === 'yes') parts.push('Champion');
     if (c.colors.length) parts.push(c.colors.map(t => TYPE_LABEL[t]).join('/'));
     if (c.tags.length) parts.push(c.tags.map(tagLabel).join('/'));
+    if ((c.keywords || []).length) parts.push(c.keywords.map(k => (KEYWORD[k] ? KEYWORD[k].label : k).replace(/!$/, '')).join('/'));
     parts.push(c.kind === 'any' ? 'card' : (CARD_TYPE_LABEL[c.kind] || c.kind));
     let s = `${c.count > 1 ? c.count + ' random' : 'a random'} ${parts.join(' ')}${c.count > 1 ? 's' : ''}`;
     const costs = [];
@@ -334,7 +337,8 @@ window.Cards = (() => {
     { id: 'token:carrot', name: 'Carrot', card_type: 'trainer', token: true, types: [], energy: 0, power: 0, might: null,
       keywords: ['exhaust'], effect: '[Exhaust>]: Trash this. Add 1 Energy of any type.', image_url: CARROT_ART, rarity: 'common', full_art: true },
   ];
-  const isToken = def => !!(def && def.token);
+  // Built-in tokens have token: true; tokens made in the card maker have is_token.
+  const isToken = def => !!(def && (def.token || def.is_token));
 
   // Star "cards" are virtual definitions, one per type.
   function starDef(type) {
@@ -350,7 +354,9 @@ window.Cards = (() => {
     if (!CARD_TYPE_LABEL[c.card_type]) errs.push('Pick a card type.');
     const n = (c.types || []).length;
     if (c.card_type === 'superhorse' && n !== 2) errs.push('A Superhorse Uma needs exactly two types.');
-    if (c.card_type !== 'superhorse' && (n < 1 || n > 2)) errs.push('Pick one or two types.');
+    if (c.is_token && c.card_type === 'superhorse') errs.push("A token can't be a Superhorse.");
+    if (c.card_type !== 'superhorse' && !c.is_token && (n < 1 || n > 2)) errs.push('Pick one or two types.');
+    if (c.is_token && n > 2) errs.push('Pick at most two types.');
     for (const k of ['energy', 'power']) {
       const v = Number(c[k] || 0);
       if (!Number.isInteger(v) || v < 0 || v > 15) errs.push(`${k === 'energy' ? 'Energy' : 'Power'} cost must be 0–15.`);

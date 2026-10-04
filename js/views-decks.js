@@ -101,7 +101,7 @@ window.DeckViews = (() => {
       const l = leader();
       const q = search.value.trim().toLowerCase();
       // Signature cards only show for the Superhorse they belong to.
-      const fits = cards.filter(c => c.card_type !== 'superhorse' && fitsLeader(c) &&
+      const fits = cards.filter(c => c.card_type !== 'superhorse' && !Cards.isToken(c) && fitsLeader(c) &&
         (!c.signature_of || (l && c.signature_of === l.id) || deck.cards[c.id]) &&
         (!q || c.name.toLowerCase().includes(q) || (c.effect || '').toLowerCase().includes(q)));
       poolBox.replaceChildren(...(fits.length ? fits.map(c => {
@@ -121,7 +121,7 @@ window.DeckViews = (() => {
     function draw() {
       const l = leader();
       leaderBox.replaceChildren(l ? Cards.render(l, { size: 'm' }) : h('div', { class: 'card card-back sz-m' }, h('span', null, 'No leader')));
-      const champs = cards.filter(c => Cards.isChampion(c) && fitsLeader(c));
+      const champs = cards.filter(c => Cards.isChampion(c) && !Cards.isToken(c) && fitsLeader(c));
       const ch = champion();
       champSel.replaceChildren(h('option', { value: '' }, champs.length ? 'Choose a Champion…' : 'No Champion Umas fit yet'),
         ...champs.map(c => h('option', { value: c.id, selected: c.id === deck.champion_id }, `${c.name}${c.subtitle ? ' — ' + c.subtitle : ''}`)),
@@ -131,15 +131,28 @@ window.DeckViews = (() => {
       if (l) {
         const [a, b] = l.types;
         const total = G().STAR_DECK_SIZE;
-        const range = h('input', { id: 'dk-stars', type: 'range', min: 0, max: total, step: 1, value: deck.stars[a] ?? Math.ceil(total / 2),
-          'aria-label': `${Cards.TYPE_LABEL[a]} Stars`,
-          on: { input: e => { const v = Number(e.target.value); deck.stars = { [a]: v, [b]: total - v }; drawStarsLabel(); drawWarn(); } } });
-        const label = h('div', { class: 'stars-label' });
-        const drawStarsLabel = () => label.replaceChildren(
-          h('span', { style: { color: `var(--t-${a})` } }, `${deck.stars[a] || 0} ${Cards.TYPE_LABEL[a]}`),
-          h('span', { style: { color: `var(--t-${b})` } }, `${deck.stars[b] || 0} ${Cards.TYPE_LABEL[b]}`));
-        drawStarsLabel();
-        starsBox.replaceChildren(h('label', { for: 'dk-stars' }, `Star deck (${total})`), range, label);
+        // Pick the split: quick presets (6/6, 7/5…) or step one type up/down.
+        const set = v => { v = Math.max(0, Math.min(total, v)); deck.stars = { [a]: v, [b]: total - v }; drawStars(); drawWarn(); };
+        const cur = () => deck.stars[a] ?? Math.ceil(total / 2);
+        const half = Math.floor(total / 2);
+        const presets = [...new Set([half, half + 1, half + 2, half + 3, half - 1, half - 2, half - 3])].filter(v => v >= 0 && v <= total).sort((x, y) => y - x);
+        const box = h('div', { class: 'stars-pick' });
+        const drawStars = () => {
+          const v = cur();
+          const side = (t, n, d) => h('div', { class: 'stars-side', style: { '--c1': `var(--t-${t})` } },
+            h('button', { type: 'button', class: 'icon-btn sm', 'aria-label': `One less ${Cards.TYPE_LABEL[t]} Star`, disabled: n <= 0, on: { click: () => set(v - d) } }, '−'),
+            h('span', { class: 'stars-n' }, h('strong', null, n), ' ', Cards.TYPE_LABEL[t]),
+            h('button', { type: 'button', class: 'icon-btn sm', 'aria-label': `One more ${Cards.TYPE_LABEL[t]} Star`, disabled: n >= total, on: { click: () => set(v + d) } }, '+'));
+          box.replaceChildren(
+            h('div', { class: 'stars-sides' }, side(a, v, 1), h('span', { class: 'muted' }, '/'), side(b, total - v, -1)),
+            h('div', { class: 'stars-bar', 'aria-hidden': 'true' },
+              h('span', { style: { flex: v, background: `var(--t-${a})` } }), h('span', { style: { flex: total - v, background: `var(--t-${b})` } })),
+            h('div', { class: 'stars-presets', role: 'group', 'aria-label': 'Quick splits' }, presets.map(p => h('button', {
+              type: 'button', class: 'chip-btn' + (p === v ? ' on' : ''), 'aria-pressed': String(p === v), on: { click: () => set(p) },
+            }, `${p}/${total - p}`))));
+        };
+        drawStars();
+        starsBox.replaceChildren(h('span', { class: 'label' }, `Star deck (${total}): ${Cards.TYPE_LABEL[a]} / ${Cards.TYPE_LABEL[b]}`), box);
       } else starsBox.replaceChildren();
 
       const entries = Object.entries(deck.cards).map(([id, n]) => ({ c: cards.find(x => x.id === id), n })).filter(e => e.c)

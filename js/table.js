@@ -138,6 +138,8 @@ window.Table = (() => {
     hidePeek();
     ui.anims = [];
     const s = S();
+    // Chain items nobody has seen yet on this screen (for the Signature effect).
+    const freshChain = (s.chain || []).filter(it => !ui.seenChain.has(it.n));
     const my = me();
     const op = Game.opp(s, my);
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -162,7 +164,7 @@ window.Table = (() => {
     const side = sidebarEl();
     scroller.addEventListener('scroll', () => requestAnimationFrame(drawArrows), { passive: true });
     side.addEventListener('scroll', () => requestAnimationFrame(drawArrows), { passive: true });
-    const wrap = h('div', { class: 'table' + (ui.pick ? ' picking' : '') },
+    const wrap = h('div', { class: 'table' + (ui.pick ? ' picking' : '') + (s.phase === 'mulligan' ? ' mulligan' : '') },
       hud, scroller, side, svg);
     ui.el.replaceChildren(wrap);
     wrap.querySelector('.board-scroll').scrollLeft = old.x;
@@ -198,7 +200,9 @@ window.Table = (() => {
     const turnKey = `${s.round}-${s.ramp}-${s.step}-${s.phase}`;
     const callKey = chainTop && s.priority === me() ? `${chainTop}-${me()}` : '';
     for (const it of s.chain || []) ui.seenChain.add(it.n);
-    if (!s.winner && ((ui.turnKey && ui.turnKey !== turnKey) || (callKey && ui.callKey !== callKey && ui.turnKey))) splash();
+    const sig = freshChain.filter(it => it.kind !== 'ability' && s.cards[it.iid] && Cards.isSignature(def(s.cards[it.iid]))).pop();
+    if (sig) signatureFx(s.cards[sig.iid], sig.by);
+    else if (!s.winner && ((ui.turnKey && ui.turnKey !== turnKey) || (callKey && ui.callKey !== callKey && ui.turnKey))) splash();
     ui.turnKey = turnKey;
     ui.callKey = callKey;
     if (ui.pick) {
@@ -218,10 +222,23 @@ window.Table = (() => {
     const my = me();
     const op = Game.opp(s, my);
     const done = s.mulligan[my];
-    const n = (s.zones[my + ':hand'] || []).length;
+    const hand = (s.zones[my + ':hand'] || []).map(iid => s.cards[iid]);
+    const n = hand.length;
     const theirs = s.mulligan[op];
+    // Your starting hand, dealt out big in the middle of the table.
+    ui.mullSeen = ui.mullSeen || new Set();
+    let k = 0;
+    const cards = h('div', { class: 'mull-cards' }, hand.map(c => {
+      const fresh = !ui.mullSeen.has(c.iid);
+      ui.mullSeen.add(c.iid);
+      const el = h('div', { class: 'mull-card' + (fresh ? ' deal' : ''), style: fresh ? { animationDelay: (k++ * 90) + 'ms' } : null,
+        on: { mouseenter: e => showPeek(c, e.currentTarget), mouseleave: hidePeek } },
+        Cards.render(def(c), { size: 'm' }));
+      return el;
+    }));
     return h('div', { class: 'mull-panel', role: 'dialog', 'aria-label': 'Mulligan' },
-      h('p', { class: 'eyebrow' }, 'Starting hand'),
+      h('p', { class: 'eyebrow' }, done === 'redraw' ? 'Your new hand' : 'Starting hand'),
+      cards,
       done
         ? h('p', null, done === 'keep' ? 'You kept your hand.' : 'You drew a new hand.', ' ', theirs ? 'Starting…' : `Waiting for ${Game.nameOf(s, op)}…`)
         : [h('p', null, `Look at your ${n} cards below. Keep them, or shuffle all of them back and draw ${n} new ones. You can only do this once.`),
@@ -868,6 +885,14 @@ window.Table = (() => {
     ], { wide: true, onClose: () => { hidePeek(); closeMenu(); } });
   }
 
+  // Tokens for this match: your pool's tokens (from when the match started),
+  // plus built-in ones nobody has replaced with a same-named token.
+  function matchTokens() {
+    const all = Object.values(ui.defs).filter(d => Cards.isToken(d));
+    const custom = all.filter(d => !String(d.id).startsWith('token:'));
+    return [...custom, ...all.filter(d => String(d.id).startsWith('token:') && !custom.some(c => c.name.toLowerCase() === d.name.toLowerCase()))];
+  }
+
   // Create tokens: pick how many, ready or not, and where they go.
   function tokenModal() {
     const s = S();
@@ -883,17 +908,17 @@ window.Table = (() => {
       h('div', { class: 'row wrap token-opts' },
         h('label', { for: 'tk-count' }, 'How many'), count,
         h('label', { class: 'check', for: 'tk-ready' }, ready, 'Enter ready (units normally enter exhausted)')),
-      h('div', { class: 'token-list' }, Cards.TOKENS.map(t => h('div', { class: 'token-item' },
+      h('div', { class: 'token-list' }, matchTokens().map(t => h('div', { class: 'token-item' },
         Cards.render(t, { size: 'm' }),
         h('div', { class: 'stack tight' },
           h('button', { class: 'btn primary sm', on: { click: make(t.id, 'base') } }, 'To base'),
           lanes.map(l => h('button', { class: 'btn sm', on: { click: make(t.id, l) } }, 'To ' + Game.LANE_LABEL[l])))))),
-      h('p', { class: 'hint' }, 'Tokens only exist in play. If one would go to your hand, deck or trash, it is removed instead.')), { wide: true });
+      h('p', { class: 'hint' }, 'Tokens only exist in play. If one would go to your hand, deck or trash, it is removed instead. Make your own tokens (or customize these) in Card pool → New token; they show up in matches started after that.')), { wide: true });
     count.focus();
   }
 
   function conjureModal() {
-    const defs = Object.values(ui.defs).filter(d => d.card_type !== 'star' && d.card_type !== 'superhorse' && !d.token);
+    const defs = Object.values(ui.defs).filter(d => d.card_type !== 'star' && d.card_type !== 'superhorse' && !Cards.isToken(d));
     const search = h('input', { id: 'cj-search', type: 'search', placeholder: 'Search by name, type or text' });
     const grid = h('div', { class: 'pile-list' });
     const drawList = () => {
@@ -1034,6 +1059,31 @@ window.Table = (() => {
         h('p', { class: 'hud-hint', title: info.sub }, info.sub)),
       player(my, 'me'),
       h('div', { class: 'hud-actions' }, actions));
+  }
+
+  // A Signature card was played: a full-screen moment for both players.
+  function signatureFx(c, by) {
+    const d = def(c);
+    document.querySelectorAll('.sig-fx, .turn-splash').forEach(e => e.remove());
+    const types = d.types && d.types.length ? d.types : ['wit'];
+    const c1 = `var(--t-${types[0]})`, c2 = `var(--t-${types[1] || types[0]})`;
+    const owner = ui.defs[d.signature_of];
+    const who = by === me() ? 'You' : Game.nameOf(S(), by);
+    const sparks = Array.from({ length: 22 }, (_, i) => h('span', { class: 'sig-spark', style: {
+      '--a': `${(i / 22) * 360 + Math.random() * 12}deg`, '--d': `${180 + Math.random() * 220}px`,
+      '--t': `${0.25 + Math.random() * 0.35}s`, color: i % 2 ? c1 : c2 } }));
+    const el = h('div', { class: 'sig-fx', style: { '--c1': c1, '--c2': c2 }, role: 'status', 'aria-label': `Signature card: ${d.name}` },
+      h('div', { class: 'sig-veil' }),
+      h('div', { class: 'sig-rays' }),
+      h('div', { class: 'sig-ring' }),
+      h('div', { class: 'sig-sparks' }, sparks),
+      h('div', { class: 'sig-stage' },
+        h('div', { class: 'sig-card' }, Cards.render(d, { size: 'l' }), h('span', { class: 'sig-sheen' })),
+        h('div', { class: 'sig-text' },
+          h('span', { class: 'sig-word' }, 'Signature'),
+          h('span', { class: 'sig-sub' }, `${owner ? owner.name + ' · ' : ''}${who} played ${d.name}`))));
+    document.body.append(el);
+    setTimeout(() => el.remove(), window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 1900 : 2900);
   }
 
   // Big "Your turn" flash in the middle of the screen when the turn changes.

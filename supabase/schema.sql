@@ -101,12 +101,15 @@ create table if not exists public.cards (
   tags text[] not null default '{}' check (cardinality(tags) <= 6),
   conjure jsonb,  -- Conjure filter settings (see js/cards.js)
   signature_of uuid references public.cards on delete set null, -- Signature card of this Superhorse
+  is_token boolean not null default false, -- made during play, never in decks
   image_url text,
   created_at timestamptz not null default now(),
   -- Superhorse leaders have exactly 2 types; other cards have 1 or 2.
+  -- (Tokens may have no type.)
   constraint type_count check (
     (card_type = 'superhorse' and cardinality(types) = 2)
     or (card_type <> 'superhorse' and cardinality(types) between 1 and 2)
+    or (is_token and card_type <> 'superhorse' and cardinality(types) <= 2)
   )
 );
 alter table public.cards enable row level security;
@@ -144,6 +147,13 @@ alter table public.decks enable row level security;
 -- Columns added in later updates (safe to re-run).
 alter table public.cards add column if not exists signature_of uuid references public.cards on delete set null;
 alter table public.decks add column if not exists champion_id uuid references public.cards on delete set null;
+alter table public.cards add column if not exists is_token boolean not null default false;
+alter table public.cards drop constraint if exists type_count;
+alter table public.cards add constraint type_count check (
+  (card_type = 'superhorse' and cardinality(types) = 2)
+  or (card_type <> 'superhorse' and cardinality(types) between 1 and 2)
+  or (is_token and card_type <> 'superhorse' and cardinality(types) <= 2)
+);
 
 drop policy if exists "friends can see decks" on public.decks;
 create policy "friends can see decks" on public.decks

@@ -93,7 +93,8 @@ window.Game = (() => {
     return { id: c.id, name: c.name, card_type: c.card_type, types: c.types, energy: c.energy, power: c.power,
       might: c.might, keywords: c.keywords || [], effect: c.effect || '', image_url: c.image_url || null,
       rarity: c.rarity || 'common', full_art: !!c.full_art, subtitle: c.subtitle || null,
-      tags: c.tags || [], conjure: c.conjure || null, signature_of: c.signature_of || null };
+      tags: c.tags || [], conjure: c.conjure || null, signature_of: c.signature_of || null,
+      ...(c.is_token ? { token: true } : {}) };
   }
 
   // ---------- helpers ----------
