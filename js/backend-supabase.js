@@ -24,6 +24,9 @@ window.SupabaseBackend = class SupabaseBackend {
       if (/cards_keywords_check/.test(error.message || '')) {
         throw new Error('Your database needs the latest update to use custom keywords: in Supabase, open SQL Editor and run supabase/11-keywords.sql, then try again.');
       }
+      if (/play_anim/.test(error.message || '')) {
+        throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/12-animations.sql, then try again.');
+      }
       if (/sleeve/.test(error.message || '')) {
         throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/10-sleeves.sql, then try again.');
       }
@@ -121,6 +124,7 @@ window.SupabaseBackend = class SupabaseBackend {
     // Only sent when used, so older databases (before 08) keep working.
     if (card.signature_of !== undefined) row.signature_of = card.signature_of || null;
     if (card.is_token !== undefined) row.is_token = !!card.is_token;
+    if (card.play_anim !== undefined) row.play_anim = card.play_anim || null;
     if (imageFile) row.image_url = await this.uploadImage(imageFile);
     if (card.id) return this.check(await this.sb.from('cards').update(row).eq('id', card.id).select().single());
     return this.check(await this.sb.from('cards').insert(row).select().single());
@@ -144,6 +148,24 @@ window.SupabaseBackend = class SupabaseBackend {
     }
   }
   async deleteKeyword(id) { this.check(await this.sb.from('keywords').delete().eq('id', id)); }
+
+  // ----- play animations (Animation maker) -----
+  async listAnimations() {
+    const { data, error } = await this.sb.from('animations').select('*').order('name');
+    if (error) { if (/animations/.test(error.message || '')) return []; throw new Error(error.message); }
+    return data;
+  }
+  async saveAnimation(a) {
+    const row = { name: a.name.trim(), kind: a.kind, config: a.kind === 'preset' ? a.config : null, code: a.kind === 'code' ? a.code : null, duration: Number(a.duration) };
+    try {
+      if (a.id) return this.check(await this.sb.from('animations').update(row).eq('id', a.id).select().single());
+      return this.check(await this.sb.from('animations').insert(row).select().single());
+    } catch (e) {
+      if (/relation .*animations|animations.*does not exist|schema cache/i.test(e.message)) throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/12-animations.sql, then try again.');
+      throw e;
+    }
+  }
+  async deleteAnimation(id) { this.check(await this.sb.from('animations').delete().eq('id', id)); }
 
   // Upload an image (card art, sleeves) to your folder in the card-art bucket.
   async uploadImage(file) {

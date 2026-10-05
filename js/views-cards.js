@@ -50,6 +50,7 @@ window.CardViews = (() => {
               App.go('cards');
             } catch (err) { U.toast(err.message, 'error'); btn.disabled = false; }
           } } }, 'Import sample cards') : null,
+          h('button', { class: 'btn', on: { click: () => animList() } }, 'Animations'),
           h('button', { class: 'btn', on: { click: () => App.go('maker', { newToken: true }) } }, 'New token'),
           h('button', { class: 'btn primary', on: { click: () => App.go('maker') } }, 'New card'))),
       h('div', { class: 'filters' }, search, typeSel, kindSel, rarSel,
@@ -68,6 +69,8 @@ window.CardViews = (() => {
           : h('p', { class: 'muted' }, 'Made by ' + author),
         builtin ? h('div', { class: 'row' }, h('button', { class: 'btn primary', on: { click: () => { m.close(); App.go('maker', { fromBuiltin: c }); } } }, 'Customize')) : null,
         (c.keywords || []).length ? h('dl', { class: 'kw-help' }, c.keywords.map(k => Cards.KEYWORD[k] ? [h('dt', null, Cards.KEYWORD[k].label), h('dd', null, Cards.KEYWORD[k].help)] : null)) : null,
+        c.play_anim && Anim.get(c.play_anim) ? h('div', { class: 'row' }, h('span', { class: 'muted' }, `Plays: ${Anim.get(c.play_anim).name}`),
+          h('button', { class: 'btn sm', on: { click: () => Anim.play(Anim.get(c.play_anim), { def: c, player: App.me.name, mine: true }) } }, '▶ Preview')) : null,
         mine && !builtin ? h('div', { class: 'row' },
           h('button', { class: 'btn', on: { click: () => { m.close(); App.go('maker', c); } } }, 'Edit'),
           h('button', { class: 'btn danger', on: { click: async () => {
@@ -264,6 +267,8 @@ window.CardViews = (() => {
           sel('cj-kind', cj.kind, [['any', 'Any'], ['uma', 'Uma'], ['trick', 'Trick'], ['trainer', 'Trainer']], v => (cj.kind = v))),
         h('div', { class: 'field' }, h('label', { for: 'cj-champ' }, 'Champion'),
           sel('cj-champ', cj.champion, [['any', 'Any'], ['yes', 'Champions only'], ['no', 'No Champions']], v => (cj.champion = v))),
+        h('div', { class: 'field' }, h('label', { for: 'cj-sig' }, 'Signature cards'),
+          sel('cj-sig', cj.signature || 'no', Cards.CONJURE_SIG, v => (cj.signature = v))),
         costField('cj-e', 'Energy cost', 'energyOp', 'energy'),
         costField('cj-p', 'Power cost', 'powerOp', 'power'),
         h('div', { class: 'field' }, h('label', { for: 'cj-count' }, 'How many'), numIn('cj-count', cj.count, 1, 5, v => (cj.count = v))),
@@ -278,7 +283,7 @@ window.CardViews = (() => {
       conjureBox.hidden = !card.keywords.includes('conjure');
       if (conjureBox.hidden) return;
       const defs = Object.fromEntries(pool.map(c => [c.id, c]));
-      const n = Cards.conjureMatches(defs, cj).length;
+      const n = Cards.conjureMatches(defs, cj, { src: card }).length;
       cjSummary.replaceChildren(h('strong', null, 'Conjures ' + Cards.conjureSummary(cj) + '. '),
         h('span', { class: n ? 'ok-text' : 'warn-text' }, n ? `${n} card${n === 1 ? '' : 's'} in the pool match right now.` : 'No cards in the pool match yet.'));
     }
@@ -452,6 +457,26 @@ window.CardViews = (() => {
     const adjust = h('button', { type: 'button', class: 'btn sm', disabled: !artSource, on: { click: () => artSource && cropFrom(artSource) } }, 'Adjust crop');
     const clearArt = h('button', { type: 'button', class: 'btn ghost sm', on: { click: () => { imageFile = null; previewUrl = null; card.image_url = null; artSource = null; adjust.disabled = true; file.value = ''; drawPreview(); } } }, 'Remove art');
 
+    // Advanced: the animation this card plays
+    const previewDef = () => ({ ...card, image_url: previewUrl, name: card.name || 'Sample Card' });
+    const animSel = h('select', { id: 'mk-anim', on: { change: e => { card.play_anim = e.target.value || null; animEditBtn.disabled = !card.play_anim; } } });
+    const drawAnimSel = () => animSel.replaceChildren(h('option', { value: '' }, 'None'),
+      ...Anim.list().map(a => h('option', { value: a.id, selected: a.id === card.play_anim }, `${a.name}${a.kind === 'code' ? ' (code)' : ''}`)));
+    const animPreviewBtn = h('button', { type: 'button', class: 'btn sm', on: { click: () => {
+      const a = card.play_anim && Anim.get(card.play_anim);
+      if (!a) { U.toast('Pick an animation first.'); return; }
+      if (!Anim.play(a, { def: previewDef(), player: App.me.name, mine: true })) U.toast('Animations are switched off in this browser (table sidebar → Effects).');
+    } } }, '▶ Preview');
+    const animEditBtn = h('button', { type: 'button', class: 'btn sm ghost', disabled: !card.play_anim, on: { click: () => animModal(Anim.get(card.play_anim), afterAnimSave, previewDef) } }, 'Edit');
+    async function afterAnimSave(saved) {
+      await App.loadAnimations();
+      if (saved && saved.id) card.play_anim = saved.id;
+      if (card.play_anim && !Anim.get(card.play_anim)) card.play_anim = null;
+      animEditBtn.disabled = !card.play_anim;
+      drawAnimSel();
+    }
+    drawAnimSel();
+
     const save = h('button', { class: 'btn primary', type: 'submit' }, editing ? 'Save changes' : 'Add to card pool');
     const form = h('form', { class: 'maker-form', on: { submit: async e => {
       e.preventDefault();
@@ -488,6 +513,11 @@ window.CardViews = (() => {
       h('div', { class: 'field' }, h('label', { for: 'mk-effect' }, 'Effect text'), effect, counter, tools),
       h('div', { class: 'field' }, h('label', { for: 'mk-art' }, 'Card art'), h('div', { class: 'row wrap' }, file, pasteBtn, adjust, clearArt), dropZone,
         h('p', { class: 'hint' }, 'PNG, JPG, WebP or GIF, up to 15 MB. You crop it to the card after choosing it (it\'s saved as a smaller image). If you switch full art on or off, press Adjust crop to re-frame it. Use art you made or have permission to use.')),
+      h('details', { class: 'advanced', open: !!card.play_anim },
+        h('summary', null, 'Advanced'),
+        h('div', { class: 'field' }, h('label', { for: 'mk-anim' }, 'Play animation'),
+          h('div', { class: 'row wrap' }, animSel, animPreviewBtn, animEditBtn, h('button', { type: 'button', class: 'btn sm ghost', on: { click: () => animModal(null, afterAnimSave, previewDef) } }, '+ New animation')),
+          h('p', { class: 'hint' }, 'Plays over the table for both players when this card is played (or when it\'s revealed, if it was played face-down). On a Signature card it replaces the built-in Signature moment.'))),
       errors,
       h('div', { class: 'row' },
         h('button', { type: 'button', class: 'btn ghost', on: { click: () => App.go('cards') } }, 'Cancel'),
@@ -551,5 +581,97 @@ window.CardViews = (() => {
     label.focus();
   }
 
-  return { renderPool, renderMaker };
+  // ---------- Animation maker ----------
+  // List of the group's animations (from the Card pool page).
+  function animList() {
+    const body = h('div', { class: 'stack' });
+    const sample = () => ({ name: 'Sample Card', types: ['speed', 'wit'], card_type: 'uma', might: 3, energy: 2, power: 0, keywords: [], effect: 'A card to preview animations with.', rarity: 'rare' });
+    const draw = () => {
+      const all = Anim.list();
+      body.replaceChildren(
+        h('p', { class: 'muted' }, 'Animations play over the table when a card that uses them is played. Pick one for a card in Card maker → Advanced.'),
+        all.length ? h('div', { class: 'anim-list' }, all.map(a => h('div', { class: 'anim-row' },
+          h('strong', null, a.name), h('span', { class: 'pill' }, a.kind === 'code' ? 'Code' : (Anim.PRESETS.find(p => p.id === (a.config || {}).effect) || {}).label || 'Preset'),
+          h('span', { class: 'muted' }, `${Number(a.duration)}s`),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn sm', on: { click: () => Anim.play(a, { def: sample(), player: App.me.name, mine: true }) } }, '▶'),
+            a.owner === App.me.id || App.me.admin ? h('button', { class: 'btn sm ghost', on: { click: () => animModal(a, async () => { await App.loadAnimations(); draw(); }, sample) } }, 'Edit') : null)))) : h('p', { class: 'muted' }, 'No animations yet.'),
+        h('div', { class: 'row end' }, h('button', { class: 'btn primary', on: { click: () => animModal(null, async () => { await App.loadAnimations(); draw(); }, sample) } }, '+ New animation')));
+    };
+    U.modal('Animations', body, { wide: true });
+    draw();
+  }
+
+  // Make or edit an animation: a preset with options, or your own code.
+  function animModal(existing, onDone, sampleDef) {
+    const a = existing ? U.clone(existing) : { name: '', kind: 'preset', config: { ...Anim.PRESET_DEFAULT }, code: Anim.CODE_TEMPLATE, duration: 2.5 };
+    a.config = { ...Anim.PRESET_DEFAULT, ...(a.config || {}) };
+    if (!a.code) a.code = Anim.CODE_TEMPLATE;
+    const name = h('input', { id: 'am-name', maxlength: 40, value: a.name, placeholder: 'e.g. Final Corner Thunder', on: { input: e => (a.name = e.target.value) } });
+    const kindRow = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Kind' });
+    const presetBox = h('div', { class: 'stack' });
+    const codeBox = h('div', { class: 'stack' });
+    const dur = h('input', { id: 'am-dur', type: 'number', min: 0.5, max: 6, step: 0.1, value: a.duration, on: { input: e => (a.duration = Math.max(0.5, Math.min(6, Number(e.target.value) || 2.5))) } });
+    const drawKind = () => {
+      kindRow.replaceChildren(...[['preset', 'Preset'], ['code', 'Code (HTML / CSS / JS)']].map(([id, label]) => h('button', {
+        type: 'button', role: 'radio', 'aria-checked': String(a.kind === id), class: 'seg-btn' + (a.kind === id ? ' on' : ''),
+        on: { click: () => { a.kind = id; drawKind(); } } }, label)));
+      presetBox.hidden = a.kind !== 'preset';
+      codeBox.hidden = a.kind !== 'code';
+    };
+    // preset options
+    const cfg = a.config;
+    const effSel = h('select', { id: 'am-eff', on: { change: e => (cfg.effect = e.target.value) } },
+      Anim.PRESETS.map(p => h('option', { value: p.id, selected: p.id === cfg.effect }, p.label)));
+    const c1 = h('input', { type: 'color', id: 'am-c1', value: cfg.c1, 'aria-label': 'Color 1', on: { input: e => (cfg.c1 = e.target.value) } });
+    const c2 = h('input', { type: 'color', id: 'am-c2', value: cfg.c2, 'aria-label': 'Color 2', on: { input: e => (cfg.c2 = e.target.value) } });
+    const colorMode = h('select', { id: 'am-cm', on: { change: e => { cfg.colorMode = e.target.value; customColors.hidden = cfg.colorMode !== 'custom'; } } },
+      h('option', { value: 'card', selected: cfg.colorMode !== 'custom' }, "The card's colors"), h('option', { value: 'custom', selected: cfg.colorMode === 'custom' }, 'Pick colors'));
+    const customColors = h('span', { class: 'row', hidden: cfg.colorMode !== 'custom' }, c1, c2);
+    const inten = h('input', { id: 'am-int', type: 'range', min: 1, max: 3, step: 1, value: cfg.intensity, on: { input: e => (cfg.intensity = Number(e.target.value)) } });
+    const banner = h('input', { id: 'am-ban', maxlength: 40, value: cfg.banner || '', placeholder: 'Optional, e.g. FINAL CORNER!', on: { input: e => (cfg.banner = e.target.value) } });
+    presetBox.append(
+      h('div', { class: 'cj-grid' },
+        h('div', { class: 'field' }, h('label', { for: 'am-eff' }, 'Effect'), effSel),
+        h('div', { class: 'field' }, h('label', { for: 'am-cm' }, 'Colors'), h('div', { class: 'row' }, colorMode, customColors)),
+        h('div', { class: 'field' }, h('label', { for: 'am-int' }, 'Intensity'), inten),
+        h('div', { class: 'field' }, h('label', { for: 'am-ban' }, 'Banner text'), banner)));
+    // code
+    const code = h('textarea', { id: 'am-code', class: 'code-area', rows: 16, spellcheck: 'false', maxlength: 20000, on: { input: e => (a.code = e.target.value) } });
+    code.value = a.code;
+    code.addEventListener('keydown', e => { if (e.key === 'Tab') { e.preventDefault(); code.setRangeText('  ', code.selectionStart, code.selectionEnd, 'end'); a.code = code.value; } });
+    codeBox.append(
+      h('p', { class: 'hint' }, 'Write HTML, CSS and JavaScript. It runs in a sealed-off frame over the table: it can draw anything, but it can\'t reach the game, the page, logins or the internet (images over https are fine). ',
+        h('code', null, 'PLAY'), ' tells you about the card: ', h('code', null, 'PLAY.name, PLAY.colors, PLAY.art, PLAY.player, PLAY.mine, PLAY.duration'), '.'),
+      code,
+      h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn sm ghost', on: { click: () => { code.value = a.code = Anim.CODE_TEMPLATE; } } }, 'Reset to starter code')));
+    const err = h('p', { class: 'form-error' });
+    const preview = h('button', { class: 'btn', on: { click: () => {
+      if (!Anim.play({ ...a }, { def: (sampleDef && sampleDef()) || { name: 'Sample Card', types: ['speed', 'wit'] }, player: App.me.name, mine: true })) U.toast('Animations (or code animations) are switched off in this browser: table sidebar → Effects.');
+    } } }, '▶ Preview');
+    const save = h('button', { class: 'btn primary', on: { click: async () => {
+      if (!a.name.trim()) { err.textContent = 'Give the animation a name.'; return; }
+      save.disabled = true;
+      try {
+        const saved = await App.backend.saveAnimation(a);
+        m.close();
+        U.toast(`Animation "${saved.name}" saved.`, 'good');
+        if (onDone) await onDone(saved);
+      } catch (e) { err.textContent = e.message; save.disabled = false; }
+    } } }, existing ? 'Save animation' : 'Create animation');
+    const del = existing ? h('button', { class: 'btn danger ghost', on: { click: async () => {
+      if (!(await U.ask(`Delete the animation "${existing.name}"? Cards that use it stop playing it.`, 'Delete', true))) return;
+      try { await App.backend.deleteAnimation(existing.id); m.close(); if (onDone) await onDone(null); } catch (e) { err.textContent = e.message; }
+    } } }, 'Delete') : null;
+    const m = U.modal(existing ? 'Edit animation' : 'Animation maker', h('div', { class: 'stack' },
+      h('div', { class: 'field' }, h('label', { for: 'am-name' }, 'Name'), name),
+      kindRow, presetBox, codeBox,
+      h('div', { class: 'field' }, h('label', { for: 'am-dur' }, 'Duration (seconds, 0.5–6)'), dur),
+      err,
+      h('div', { class: 'row between' }, del || h('span'), h('div', { class: 'row' }, preview, save))), { wide: true });
+    drawKind();
+    name.focus();
+  }
+
+  return { renderPool, renderMaker, animModal, animList };
 })();

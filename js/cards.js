@@ -50,14 +50,25 @@ window.Cards = (() => {
   // ---------- Conjure ----------
   // A card's conjure settings describe which pool cards it can create:
   // { count, kind, energyOp, energy, powerOp, power, colors[], champion, tags[], dest }
-  const CONJURE_DEFAULT = { count: 1, kind: 'any', energyOp: 'any', energy: 2, powerOp: 'any', power: 1, colors: [], champion: 'any', tags: [], keywords: [], dest: 'hand' };
+  // signature: 'no' = never conjures Signature cards (default),
+  // 'color' = only Signatures sharing a color with the conjuring card,
+  // 'any' = only Signatures (any), 'mine' = only your own Superhorse's Signatures.
+  const CONJURE_DEFAULT = { count: 1, kind: 'any', energyOp: 'any', energy: 2, powerOp: 'any', power: 1, colors: [], champion: 'any', tags: [], keywords: [], signature: 'no', dest: 'hand' };
+  const CONJURE_SIG = [['no', 'No Signature cards'], ['color', 'Signature cards of this color'], ['any', 'Any Signature card'], ['mine', 'Signature cards of my Superhorse']];
   const conjureOf = def => (def && def.conjure ? { ...CONJURE_DEFAULT, ...def.conjure } : null);
   const cmp = (op, a, b) => op === 'eq' ? a === b : op === 'le' ? a <= b : op === 'ge' ? a >= b : true;
 
-  function conjureMatches(defs, c) {
+  // ctx: { src: the conjuring card's def, leaderId: the conjurer's Superhorse id (in a match) }
+  function conjureMatches(defs, c, ctx = {}) {
     const kws = c.keywords || [];
+    const sig = c.signature || 'no';
+    const srcTypes = (ctx.src && ctx.src.types) || [];
+    const sigOk = d => sig === 'no' ? !d.signature_of
+      : !!d.signature_of && (sig === 'any'
+        || (sig === 'color' && (d.types || []).some(t => srcTypes.includes(t)))
+        || (sig === 'mine' && (!ctx.leaderId || d.signature_of === ctx.leaderId)));
     return Object.values(defs).filter(d => d && d.card_type !== 'star' && d.card_type !== 'superhorse' && !isToken(d) &&
-      (!kws.length || (d.keywords || []).some(k => kws.includes(k))) &&
+      (!kws.length || (d.keywords || []).some(k => kws.includes(k))) && sigOk(d) &&
       (c.kind === 'any' || d.card_type === c.kind) &&
       cmp(c.energyOp, Number(d.energy || 0), Number(c.energy)) &&
       cmp(c.powerOp, Number(d.power || 0), Number(c.power)) &&
@@ -70,6 +81,7 @@ window.Cards = (() => {
     const op = { eq: '', le: '≤ ', ge: '≥ ' };
     const parts = [];
     if (c.champion === 'yes') parts.push('Champion');
+    if (c.signature && c.signature !== 'no') parts.push('Signature');
     if (c.colors.length) parts.push(c.colors.map(t => TYPE_LABEL[t]).join('/'));
     if (c.tags.length) parts.push(c.tags.map(tagLabel).join('/'));
     if ((c.keywords || []).length) parts.push(c.keywords.map(k => (KEYWORD[k] ? KEYWORD[k].label : k).replace(/!$/, '')).join('/'));
@@ -79,6 +91,8 @@ window.Cards = (() => {
     if (c.energyOp !== 'any') costs.push(`energy ${op[c.energyOp]}${c.energy}`);
     if (c.powerOp !== 'any') costs.push(`power ${op[c.powerOp]}${c.power}`);
     if (c.champion === 'no') costs.push('not a Champion');
+    if (c.signature === 'color') costs.push('of this card\'s color');
+    if (c.signature === 'mine') costs.push('of your Superhorse');
     if (costs.length) s += ` (${costs.join(', ')})`;
     return s + ` → ${({ hand: 'hand', base: 'base', 'deck-top': 'top of deck' })[c.dest] || 'hand'}`;
   }
@@ -408,5 +422,5 @@ window.Cards = (() => {
     return errs;
   }
 
-  return { KW_GROUPS, kwSlug, setCustomKeywords, SLEEVE_BORDERS, TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
+  return { CONJURE_SIG, KW_GROUPS, kwSlug, setCustomKeywords, SLEEVE_BORDERS, TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
 })();

@@ -188,8 +188,17 @@ window.App = (() => {
     try { Cards.setCustomKeywords(await app.backend.listKeywords()); } catch (e) { console.warn(e); }
   }
 
+  async function loadAnimations() {
+    try {
+      const rows = await app.backend.listAnimations();
+      for (const a of rows) if (a.kind === 'code' && a.code == null) a.code = Anim.CODE_TEMPLATE; // demo sample
+      Anim.setLibrary(rows);
+    } catch (e) { console.warn(e); }
+  }
+
   function afterLogin() {
     loadKeywords();
+    loadAnimations();
     // Challenges that were already accepted before this page loaded are old:
     // don't jump into those matches (they're listed under "Your matches").
     firstChallengeList = true;
@@ -404,7 +413,7 @@ window.App = (() => {
     }) : [h('p', { class: 'muted' }, 'No matches yet.')]));
   }
 
-  return { start, go, loadKeywords, get backend() { return app.backend; }, get me() { return app.me; }, who: id => who(id), refreshProfiles: async () => { profiles = await app.backend.listProfiles(); } };
+  return { start, go, loadKeywords, loadAnimations, get backend() { return app.backend; }, get me() { return app.me; }, who: id => who(id), refreshProfiles: async () => { profiles = await app.backend.listProfiles(); } };
 })();
 
 document.addEventListener('DOMContentLoaded', () => App.start());

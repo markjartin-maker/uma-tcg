@@ -104,6 +104,7 @@ window.Game = (() => {
       might: c.might, keywords: c.keywords || [], effect: c.effect || '', image_url: c.image_url || null,
       rarity: c.rarity || 'common', full_art: !!c.full_art, subtitle: c.subtitle || null,
       tags: c.tags || [], conjure: c.conjure || null, signature_of: c.signature_of || null,
+      play_anim: c.play_anim || null,
       ...(c.is_token ? { token: true } : {}) };
   }
 

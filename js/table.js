@@ -72,7 +72,12 @@ window.Table = (() => {
     draw();
     // Fresh match: show the dice roll for who goes first.
     const s0 = S();
-    if (s0.dice && s0.phase === 'mulligan' && !Object.keys(s0.mulligan || {}).length) diceFx(s0);
+    if (s0.dice && s0.phase === 'mulligan' && !Object.keys(s0.mulligan || {}).length) {
+      // The clash: both Superhorses face off, then the dice drop in as the bolts fade.
+      const lead = pid => { const c = (s0.zones[pid + ':leader'] || []).map(i => s0.cards[i])[0]; return c ? def(c) : null; };
+      const my = me(), op = Game.opp(s0, my);
+      Anim.clash({ name: Game.nameOf(s0, my), def: lead(my) }, { name: Game.nameOf(s0, op), def: lead(op) }, () => diceFx(s0, { drop: true }));
+    }
   }
 
   const me = () => ui.viewAs;
@@ -209,8 +214,17 @@ window.Table = (() => {
     const sdKey = s.showdown && s.showdown.active ? `${s.showdown.pid}-${s.showdown.made}` : '';
     if (sdKey && ui.sdKey !== undefined && ui.sdKey !== sdKey) showdownFx(s);
     ui.sdKey = sdKey;
-    const sig = freshChain.filter(it => it.kind !== 'ability' && s.cards[it.iid] && Cards.isSignature(def(s.cards[it.iid]))).pop();
-    if (sig) signatureFx(s.cards[sig.iid], sig.by);
+    // Card play animations: a card's own animation (also when a face-down
+    // card is revealed); Signature cards without one get the built-in moment.
+    const played = freshChain.filter(it => it.kind !== 'ability' && s.cards[it.iid]).map(it => ({ c: s.cards[it.iid], by: it.by }));
+    for (const c of Object.values(s.cards)) {
+      if (ui.prevFD && ui.prevFD.has(c.iid) && !c.faceDown && Game.BOARD.includes(Game.zoneKind(c.zone))) played.push({ c, by: c.owner });
+    }
+    ui.prevFD = new Set(Object.values(s.cards).filter(c => c.faceDown && Game.BOARD.includes(Game.zoneKind(c.zone))).map(c => c.iid));
+    const withAnim = played.filter(x => def(x.c).play_anim && Anim.get(def(x.c).play_anim)).pop();
+    const sig = played.filter(x => Cards.isSignature(def(x.c))).pop();
+    if (withAnim && Anim.play(Anim.get(def(withAnim.c).play_anim), { def: def(withAnim.c), player: Game.nameOf(s, withAnim.by), mine: withAnim.by === me() })) { /* played */ }
+    else if (sig) signatureFx(sig.c, sig.by);
     else if (!s.winner && ((ui.turnKey && ui.turnKey !== turnKey) || (callKey && ui.callKey !== callKey && ui.turnKey))) splash();
     ui.turnKey = turnKey;
     ui.callKey = callKey;
@@ -871,7 +885,8 @@ window.Table = (() => {
 
   function doConjure(c) {
     const cj = Cards.conjureOf(def(c));
-    const options = Cards.conjureMatches(ui.defs, cj);
+    const leader = (S().zones[me() + ':leader'] || []).map(i => S().cards[i])[0];
+    const options = Cards.conjureMatches(ui.defs, cj, { src: def(c), leaderId: leader ? leader.def : null });
     if (!options.length) { U.toast('No cards in the pool match this Conjure.', 'error'); return; }
     const picks = [];
     for (let i = 0; i < cj.count; i++) picks.push(options[crypto.getRandomValues(new Uint32Array(1))[0] % options.length].id);
@@ -1259,7 +1274,7 @@ window.Table = (() => {
   }
 
   // Dice roll for who goes first: both dice tumble, ties roll again.
-  function diceFx(s) {
+  function diceFx(s, opts = {}) {
     const PIPS = { 1: [5], 2: [1, 9], 3: [1, 5, 9], 4: [1, 3, 7, 9], 5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9] };
     const face = n => h('div', { class: 'die-face' }, Array.from({ length: 9 }, (_, i) => h('i', { class: PIPS[n].includes(i + 1) ? 'on' : '' })));
     const [p0, p1] = s.order;
@@ -1272,7 +1287,7 @@ window.Table = (() => {
     };
     const a = dieBox(p0), b = dieBox(p1);
     const note = h('p', { class: 'dice-note' }, 'Rolling for who goes first…');
-    const el = h('div', { class: 'dice-fx', role: 'status', on: { click: () => el.remove() } },
+    const el = h('div', { class: 'dice-fx' + (opts.drop ? ' drop' : ''), role: 'status', on: { click: () => el.remove() } },
       h('div', { class: 'dice-card' }, h('p', { class: 'eyebrow' }, 'Who goes first?'), h('div', { class: 'dice-row' }, a, h('span', { class: 'dice-vs' }, 'vs'), b), note));
     document.body.append(el);
     const setDie = (box, n, rolling) => {
@@ -1373,6 +1388,7 @@ window.Table = (() => {
           h('button', { class: 'btn', on: { click: () => act('shuffleDeck') } }, 'Shuffle deck'),
           h('button', { class: 'btn ghost', disabled: !s.arrows.some(a => a.by === my), on: { click: () => act('clearArrows') } }, 'Clear my arrows'),
           h('button', { class: 'btn ghost', disabled: !canUndo, title: canUndo ? 'Undo your last action' : 'Only your own last action can be undone', on: { click: () => act('undo') } }, 'Undo')),
+        effectsBox(),
         h('details', { class: 'keys-box' }, h('summary', null, 'Mouse & keyboard'), h('dl', { class: 'keys' },
           h('dt', null, 'Left-click'), h('dd', null, 'exhaust / ready your card · ping theirs'),
           h('dt', null, 'Right-click'), h('dd', null, 'all options (long-press on touch). Your Stars: recycle'),
@@ -1386,6 +1402,16 @@ window.Table = (() => {
       h('div', { class: 'row between' },
         h('button', { class: 'btn ghost sm', on: { click: () => { leave(); App.go('play'); } } }, '← Lobby'),
         !s.winner ? h('button', { class: 'btn ghost sm danger', on: { click: async () => { if (await U.ask('Concede this match?', 'Concede', true)) act('concede'); } } }, 'Concede') : null));
+  }
+
+  // Animation settings (just for this browser).
+  function effectsBox() {
+    const p = Anim.prefs();
+    const cb = (key, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!p[key],
+      on: { change: e => { p[key] = e.target.checked; Anim.setPrefs(p); } } }), label);
+    return h('details', { class: 'keys-box' }, h('summary', null, 'Effects'),
+      h('div', { class: 'stack tight fx-prefs' }, cb('on', 'Play card animations'), cb('code', 'Allow custom-code animations'),
+        h('p', { class: 'hint' }, 'Only changes what you see on this computer.')));
   }
 
   // ---------- the chain panel ----------

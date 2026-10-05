@@ -12,6 +12,16 @@ window.DemoBackend = class DemoBackend {
     ];
     this.cards = DemoBackend.samplePool();
     this.decks = DemoBackend.sampleDecks(this.cards);
+    // Two sample play animations (demo only), tied to two sample cards.
+    this.animations = [
+      { id: 'anim-thunder', owner: 'u-rival', name: 'Thunder Corner', kind: 'preset', duration: 2.4,
+        config: { effect: 'lightning', colorMode: 'card', intensity: 3, banner: 'Final corner!' } },
+      { id: 'anim-namepop', owner: 'u-rival', name: 'Name Burst', kind: 'code', duration: 2.2, code: null },
+    ];
+    for (const c of this.cards) {
+      if (c.name === 'Final Corner Kick') c.play_anim = 'anim-thunder';
+      if (c.name === 'Steamroller') c.play_anim = 'anim-namepop';
+    }
     this.challenges = [];
     this.matches = {};
     this.listeners = { challenges: new Set(), matches: {} };
@@ -72,6 +82,19 @@ window.DemoBackend = class DemoBackend {
     return row;
   }
   async deleteKeyword(id) { this.keywords = (this.keywords || []).filter(k => k.id !== id); }
+  async listAnimations() { return (this.animations || []).map(a => U.clone(a)); }
+  async saveAnimation(a) {
+    this.animations = this.animations || [];
+    const row = { ...U.clone(a), name: a.name.trim() };
+    if (row.id) { const i = this.animations.findIndex(x => x.id === row.id); this.animations[i] = { ...this.animations[i], ...row }; return this.animations[i]; }
+    row.id = U.uid(); row.owner = this.me.id;
+    this.animations.push(row);
+    return row;
+  }
+  async deleteAnimation(id) {
+    this.animations = (this.animations || []).filter(a => a.id !== id);
+    for (const c of this.cards) if (c.play_anim === id) c.play_anim = null;
+  }
   async saveDeck(deck) {
     const row = { ...U.clone(deck), updated_at: new Date().toISOString() };
     if (row.id) {
