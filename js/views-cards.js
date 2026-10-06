@@ -97,8 +97,10 @@ window.CardViews = (() => {
       editing = null;
     } else card = editing ? U.clone(editing) : blank;
     card.tags = card.tags || [];
-    card.conjure = Cards.conjureOf(card) || { ...Cards.CONJURE_DEFAULT };
-    card.conjure.keywords = card.conjure.keywords || [];
+    // Conjures being edited (a card can have several).
+    const cjs = Cards.conjuresOf(card);
+    if (!cjs.length) cjs.push({ ...Cards.CONJURE_DEFAULT });
+    for (const x of cjs) { x.keywords = x.keywords || []; x.tags = x.tags || []; x.colors = x.colors || []; }
     let pool = [];
     App.backend.listCards().then(list => { pool = list; drawTags(); drawSig(); cjTags.redraw(); drawPreview(); }).catch(() => {});
     let imageFile = null;
@@ -227,7 +229,6 @@ window.CardViews = (() => {
     drawSig();
 
     // conjure settings (shown when the card has the Conjure keyword)
-    const cj = card.conjure;
     const sel = (id, value, options, onChange) => {
       const el2 = h('select', { id, on: { change: e => { onChange(e.target.value); drawPreview(); } } },
         options.map(([v, label]) => h('option', { value: v, selected: String(v) === String(value) }, label)));
@@ -236,57 +237,83 @@ window.CardViews = (() => {
     const numIn = (id, value, min, max, onChange) => h('input', { id, type: 'number', min, max, step: 1, value,
       on: { input: e => { onChange(Math.max(min, Math.min(max, Number(e.target.value) || 0))); drawPreview(); } } });
     const OPS = [['any', 'Any'], ['eq', 'Exactly'], ['le', 'Or less'], ['ge', 'Or more']];
-    // "Any" switches the number off; the other choices compare against it.
-    const costField = (id, label, opKey, valKey) => {
-      const input = numIn(id, cj[valKey], 0, 15, v => (cj[valKey] = v));
-      input.disabled = cj[opKey] === 'any';
-      input.setAttribute('aria-label', label + ' value');
-      const op = sel(id + 'op', cj[opKey], OPS, v => { cj[opKey] = v; input.disabled = v === 'any'; });
-      return h('div', { class: 'field' }, h('label', { for: id + 'op' }, label), h('div', { class: 'row' }, op, input));
-    };
-    const chipSet = (items, key) => {
-      const row = h('div', { class: 'type-chips' });
-      const draw = () => row.replaceChildren(...(typeof items === 'function' ? items() : items).map(([id, label, color]) => {
-        const on = cj[key].includes(id);
-        return h('button', { type: 'button', class: 'type-chip' + (color ? '' : ' tag-chip') + (on ? ' on' : ''), 'aria-pressed': String(on),
-          style: color ? { '--c1': `var(--t-${id})` } : null,
-          on: { click: () => { cj[key] = on ? cj[key].filter(x => x !== id) : [...cj[key], id]; draw(); drawPreview(); } } }, label);
-      }));
-      draw();
-      row.redraw = draw;
-      return row;
-    };
-    const cjTags = chipSet(allTags, 'tags');
-    const cjKws = chipSet(() => Cards.KEYWORDS.map(k => [k.id, k.label.replace(/!$/, '')]), 'keywords');
-    const cjSummary = h('p', { class: 'conjure-summary' });
+    const panelsBox = h('div', { class: 'cj-panels' });
+    let panels = [];
+    // One settings panel per Conjure. Ids get a suffix after the first one.
+    function buildPanel(cj, idx) {
+      const sfx = idx ? '-' + (idx + 1) : '';
+      // "Any" switches the number off; the other choices compare against it.
+      const costField = (id, label, opKey, valKey) => {
+        const input = numIn(id + sfx, cj[valKey], 0, 15, v => (cj[valKey] = v));
+        input.disabled = cj[opKey] === 'any';
+        input.setAttribute('aria-label', label + ' value');
+        const op = sel(id + 'op' + sfx, cj[opKey], OPS, v => { cj[opKey] = v; input.disabled = v === 'any'; });
+        return h('div', { class: 'field' }, h('label', { for: id + 'op' + sfx }, label), h('div', { class: 'row' }, op, input));
+      };
+      const chipSet = (items, key) => {
+        const row = h('div', { class: 'type-chips' });
+        const draw = () => row.replaceChildren(...(typeof items === 'function' ? items() : items).map(([id, label, color]) => {
+          const on = cj[key].includes(id);
+          return h('button', { type: 'button', class: 'type-chip' + (color ? '' : ' tag-chip') + (on ? ' on' : ''), 'aria-pressed': String(on),
+            style: color ? { '--c1': `var(--t-${id})` } : null,
+            on: { click: () => { cj[key] = on ? cj[key].filter(x => x !== id) : [...cj[key], id]; draw(); drawPreview(); } } }, label);
+        }));
+        draw();
+        row.redraw = draw;
+        return row;
+      };
+      const tagsRow = chipSet(allTags, 'tags');
+      const kwsRow = chipSet(() => Cards.KEYWORDS.map(k => [k.id, k.label.replace(/!$/, '')]), 'keywords');
+      const summary = h('p', { class: 'conjure-summary' });
+      const label = h('input', { id: 'cj-label' + sfx, maxlength: 24, value: cj.label || '', placeholder: cjs.length > 1 ? 'e.g. "On play" (shown in the menu)' : 'Optional',
+        on: { input: e => { cj.label = e.target.value; } } });
+      const el = h('div', { class: 'cj-panel' },
+        h('div', { class: 'row between cj-head' },
+          h('strong', null, `Conjure ${idx + 1}`),
+          cjs.length > 1 ? h('button', { type: 'button', class: 'btn sm ghost danger', on: { click: () => { cjs.splice(idx, 1); buildPanels(); drawPreview(); } } }, 'Remove') : null),
+        h('div', { class: 'cj-grid' },
+          h('div', { class: 'field' }, h('label', { for: 'cj-label' + sfx }, 'Name'), label),
+          h('div', { class: 'field' }, h('label', { for: 'cj-kind' + sfx }, 'Card type'),
+            sel('cj-kind' + sfx, cj.kind, [['any', 'Any'], ['uma', 'Uma'], ['trick', 'Trick'], ['trainer', 'Trainer']], v => (cj.kind = v))),
+          h('div', { class: 'field' }, h('label', { for: 'cj-champ' + sfx }, 'Champion'),
+            sel('cj-champ' + sfx, cj.champion, [['any', 'Any'], ['yes', 'Champions only'], ['no', 'No Champions']], v => (cj.champion = v))),
+          h('div', { class: 'field' }, h('label', { for: 'cj-sig' + sfx }, 'Signature cards'),
+            sel('cj-sig' + sfx, cj.signature || 'no', Cards.CONJURE_SIG, v => (cj.signature = v))),
+          costField('cj-e', 'Energy cost', 'energyOp', 'energy'),
+          costField('cj-p', 'Power cost', 'powerOp', 'power'),
+          h('div', { class: 'field' }, h('label', { for: 'cj-count' + sfx }, 'How many'), numIn('cj-count' + sfx, cj.count, 1, 5, v => (cj.count = v))),
+          h('div', { class: 'field' }, h('label', { for: 'cj-dest' + sfx }, 'Goes to'),
+            sel('cj-dest' + sfx, cj.dest, [['hand', 'Hand'], ['base', 'Base'], ['deck-top', 'Top of deck']], v => (cj.dest = v)))),
+        h('div', { class: 'field' }, h('span', { class: 'label' }, 'Color (any of)'), chipSet(Cards.TYPES.map(t => [t.id, t.label, true]), 'colors')),
+        h('div', { class: 'field' }, h('span', { class: 'label' }, 'Tags (any of)'), tagsRow),
+        h('div', { class: 'field' }, h('span', { class: 'label' }, 'Keywords (any of)'), kwsRow),
+        summary);
+      return { el, summary, cj, redraw: () => { tagsRow.redraw(); kwsRow.redraw(); } };
+    }
+    function buildPanels() {
+      panels = cjs.map((cj, i) => buildPanel(cj, i));
+      panelsBox.replaceChildren(...panels.map(p => p.el));
+      addCj.disabled = cjs.length >= 6;
+      drawConjure();
+    }
+    const addCj = h('button', { type: 'button', class: 'btn sm', on: { click: () => { cjs.push({ ...Cards.CONJURE_DEFAULT, keywords: [], tags: [], colors: [] }); buildPanels(); drawPreview(); } } }, '+ Add another Conjure');
+    const cjTags = { redraw: () => panels.forEach(p => p.redraw()) };
+    const cjKws = cjTags;
     const conjureBox = h('fieldset', { class: 'conjure-box' },
       h('legend', null, 'Conjure settings'),
-      h('p', { class: 'hint' }, 'In a match, right-click this card → Conjure to create random cards from the pool that match these filters. Leave a filter on Any to skip it.'),
-      h('div', { class: 'cj-grid' },
-        h('div', { class: 'field' }, h('label', { for: 'cj-kind' }, 'Card type'),
-          sel('cj-kind', cj.kind, [['any', 'Any'], ['uma', 'Uma'], ['trick', 'Trick'], ['trainer', 'Trainer']], v => (cj.kind = v))),
-        h('div', { class: 'field' }, h('label', { for: 'cj-champ' }, 'Champion'),
-          sel('cj-champ', cj.champion, [['any', 'Any'], ['yes', 'Champions only'], ['no', 'No Champions']], v => (cj.champion = v))),
-        h('div', { class: 'field' }, h('label', { for: 'cj-sig' }, 'Signature cards'),
-          sel('cj-sig', cj.signature || 'no', Cards.CONJURE_SIG, v => (cj.signature = v))),
-        costField('cj-e', 'Energy cost', 'energyOp', 'energy'),
-        costField('cj-p', 'Power cost', 'powerOp', 'power'),
-        h('div', { class: 'field' }, h('label', { for: 'cj-count' }, 'How many'), numIn('cj-count', cj.count, 1, 5, v => (cj.count = v))),
-        h('div', { class: 'field' }, h('label', { for: 'cj-dest' }, 'Goes to'),
-          sel('cj-dest', cj.dest, [['hand', 'Hand'], ['base', 'Base'], ['deck-top', 'Top of deck']], v => (cj.dest = v)))),
-      h('div', { class: 'field' }, h('span', { class: 'label' }, 'Color (any of)'), chipSet(Cards.TYPES.map(t => [t.id, t.label, true]), 'colors')),
-      h('div', { class: 'field' }, h('span', { class: 'label' }, 'Tags (any of)'), cjTags),
-      h('div', { class: 'field' }, h('span', { class: 'label' }, 'Keywords (any of)'),
-        cjKws),
-      cjSummary);
+      h('p', { class: 'hint' }, 'In a match, right-click this card → Conjure to create random cards from the pool that match these filters. Leave a filter on Any to skip it. A card can have several Conjures; each one is its own menu item.'),
+      panelsBox, addCj);
     function drawConjure() {
       conjureBox.hidden = !card.keywords.includes('conjure');
       if (conjureBox.hidden) return;
       const defs = Object.fromEntries(pool.map(c => [c.id, c]));
-      const n = Cards.conjureMatches(defs, cj, { src: card }).length;
-      cjSummary.replaceChildren(h('strong', null, 'Conjures ' + Cards.conjureSummary(cj) + '. '),
-        h('span', { class: n ? 'ok-text' : 'warn-text' }, n ? `${n} card${n === 1 ? '' : 's'} in the pool match right now.` : 'No cards in the pool match yet.'));
+      for (const p of panels) {
+        const n = Cards.conjureMatches(defs, p.cj, { src: card }).length;
+        p.summary.replaceChildren(h('strong', null, 'Conjures ' + Cards.conjureSummary(p.cj) + '. '),
+          h('span', { class: n ? 'ok-text' : 'warn-text' }, n ? `${n} card${n === 1 ? '' : 's'} in the pool match right now.` : 'No cards in the pool match yet.'));
+      }
     }
+    buildPanels();
 
     const num = (id, key, label, help) => {
       const input = h('input', { id, type: 'number', min: 0, max: key === 'might' ? 99 : 15, step: 1, value: card[key] ?? '',
@@ -481,7 +508,7 @@ window.CardViews = (() => {
     const form = h('form', { class: 'maker-form', on: { submit: async e => {
       e.preventDefault();
       if (!card.keywords.includes('conjure')) card.conjure = null;
-      else card.conjure = cj;
+      else card.conjure = cjs.length === 1 ? { ...cjs[0] } : cjs.map(x => ({ ...x }));
       const errs = Cards.validate(card);
       errors.replaceChildren(...errs.map(x => h('li', null, x)));
       if (errs.length) return;

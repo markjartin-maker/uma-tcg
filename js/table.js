@@ -26,6 +26,7 @@ window.Table = (() => {
       seenChain: new Set((m.state.chain || []).map(x => x.n)),
       suppressClick: false,
       sel: new Set(), // multi-select
+      seenRoll: (m.state.lastRoll || {}).n || 0,
       floatPos: (() => { try { const p = JSON.parse(localStorage.getItem('uma-float-pos')); return p && p.x < window.innerWidth - 40 && p.y < window.innerHeight - 40 ? p : null; } catch (e) { return null; } })(),
     };
     const unwatch = App.backend.watchMatch(matchId, row => {
@@ -211,6 +212,7 @@ window.Table = (() => {
     const turnKey = `${s.round}-${s.ramp}-${s.step}-${s.phase}`;
     const callKey = chainTop && s.priority === me() ? `${chainTop}-${me()}` : '';
     for (const it of s.chain || []) ui.seenChain.add(it.n);
+    if (s.lastRoll && s.lastRoll.n !== ui.seenRoll) { ui.seenRoll = s.lastRoll.n; rollFx(s, s.lastRoll); }
     const sdKey = s.showdown && s.showdown.active ? `${s.showdown.pid}-${s.showdown.made}` : '';
     if (sdKey && ui.sdKey !== undefined && ui.sdKey !== sdKey) showdownFx(s);
     ui.sdKey = sdKey;
@@ -821,8 +823,8 @@ window.Table = (() => {
         it('To hand', () => act('move', c.iid, 'hand'));
       }
       it('Banish (out of the game)', () => act('banish', c.iid), 'danger');
-      const cjh = conjureItem(c);
-      if (cjh) { sep(); items.push(cjh); }
+      const cjh = conjureItems(c);
+      if (cjh.length) { sep(); items.push(...cjh); }
       return items.filter(x => !x || x.cls !== 'needs-ramp' && x.cls !== 'needs-race' || (x.cls === 'needs-ramp' ? s.phase !== 'race' : s.phase === 'race'));
     }
 
@@ -840,8 +842,7 @@ window.Table = (() => {
     if (!mine) it('Ping', () => act('ping', c.iid));
     if (G().USE_CHAIN !== false) it('Use ability (to the chain)', () => act('ability', c.iid));
     it('Target another card…', () => { ui.pick = { kind: 'target', iid: c.iid }; draw(); });
-    const cjb = conjureItem(c);
-    if (cjb) items.push(cjb);
+    items.push(...conjureItems(c));
     if (kind === 'env') {
       sep();
       const other = Game.ENV_SLOTS.find(k => k !== c.zone);
@@ -877,14 +878,15 @@ window.Table = (() => {
   }
 
   // ---------- Conjure ----------
-  function conjureItem(c) {
-    const cj = Cards.conjureOf(def(c));
-    if (!cj || c.owner !== me()) return null;
-    return { label: '✦ Conjure: ' + Cards.conjureSummary(cj), fn: () => doConjure(c), cls: 'conjure' };
+  // One menu item per Conjure on the card.
+  function conjureItems(c) {
+    if (c.owner !== me()) return [];
+    return Cards.conjuresOf(def(c)).map(cj => ({
+      label: `✦ Conjure${cj.label ? ' · ' + cj.label : ''}: ${Cards.conjureSummary(cj)}`, fn: () => doConjure(c, cj), cls: 'conjure' }));
   }
 
-  function doConjure(c) {
-    const cj = Cards.conjureOf(def(c));
+  function doConjure(c, cj) {
+    cj = cj || Cards.conjureOf(def(c));
     const leader = (S().zones[me() + ':leader'] || []).map(i => S().cards[i])[0];
     const options = Cards.conjureMatches(ui.defs, cj, { src: def(c), leaderId: leader ? leader.def : null });
     if (!options.length) { U.toast('No cards in the pool match this Conjure.', 'error'); return; }
@@ -1037,8 +1039,8 @@ window.Table = (() => {
         zone === 'trash' ? { label: 'Banish (out of the game)', fn: close(() => act('banish', c.iid)), cls: 'danger' }
           : { label: 'To trash', fn: close(() => act('move', c.iid, 'trash')) },
       ];
-      const cj = conjureItem(c);
-      if (cj) items.push(null, { ...cj, fn: close(cj.fn) });
+      const cjs = conjureItems(c);
+      if (cjs.length) items.push(null, ...cjs.map(x => ({ ...x, fn: close(x.fn) })));
       openMenu(c, anchor, items);
     };
     const grid = list.length ? h('div', { class: 'trash-grid' }, list.map(c => {
@@ -1273,6 +1275,96 @@ window.Table = (() => {
       h('div', { class: 'hud-actions' }, actions));
   }
 
+  // ---------- dice roll (sidebar) ----------
+  function rollModal() {
+    const count = h('input', { id: 'rd-n', type: 'number', min: 1, max: 10, value: ui.lastDice ? ui.lastDice.n : 1 });
+    let sides = ui.lastDice ? ui.lastDice.sides : 6;
+    const sideRow = h('div', { class: 'seg' });
+    const drawSides = () => sideRow.replaceChildren(...[4, 6, 8, 10, 12, 20].map(n => h('button', { type: 'button', class: 'seg-btn' + (n === sides ? ' on' : ''),
+      on: { click: () => { sides = n; drawSides(); } } }, 'd' + n)));
+    drawSides();
+    const roll = () => {
+      const n = Math.max(1, Math.min(10, Number(count.value) || 1));
+      ui.lastDice = { n, sides };
+      const results = Array.from({ length: n }, () => 1 + (crypto.getRandomValues(new Uint32Array(1))[0] % sides));
+      m.close();
+      act('rollDice', sides, results);
+    };
+    const m = U.modal('Roll dice', h('div', { class: 'stack' },
+      h('div', { class: 'row wrap' }, h('label', { for: 'rd-n' }, 'How many'), count, sideRow),
+      h('p', { class: 'hint' }, 'Both players see the roll, and it goes in the log.'),
+      h('div', { class: 'row end' }, h('button', { class: 'btn primary', on: { click: roll } }, '🎲 Roll'))));
+    count.focus();
+  }
+
+  function rollFx(s, r) {
+    const PIPS = { 1: [5], 2: [1, 9], 3: [1, 5, 9], 4: [1, 3, 7, 9], 5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9] };
+    const face = (n, sides) => sides === 6
+      ? h('div', { class: 'die-face' }, Array.from({ length: 9 }, (_, i) => h('i', { class: PIPS[n].includes(i + 1) ? 'on' : '' })))
+      : h('div', { class: 'die-num' }, n);
+    document.querySelectorAll('.roll-fx').forEach(e => e.remove());
+    const dice = r.results.map(() => h('div', { class: 'die rolling' + (r.sides === 6 ? '' : ' poly') }, face(1, r.sides)));
+    const total = r.results.reduce((a, b) => a + b, 0);
+    const note = h('p', { class: 'dice-note' }, `${r.by === me() ? 'You' : Game.nameOf(s, r.by)} rolled ${r.results.length}d${r.sides}…`);
+    const el = h('div', { class: 'roll-fx', role: 'status', on: { click: () => el.remove() } },
+      h('div', { class: 'dice-card' }, h('div', { class: 'dice-row wrap' }, dice), note));
+    document.body.append(el);
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let k = 0;
+    const tick = setInterval(() => {
+      if (++k > (reduce ? 0 : 8)) {
+        clearInterval(tick);
+        dice.forEach((d, i) => { d.classList.remove('rolling'); d.replaceChildren(face(r.results[i], r.sides)); });
+        note.textContent = `${r.by === me() ? 'You' : Game.nameOf(s, r.by)} rolled ${r.results.join(', ')}${r.results.length > 1 ? ` · total ${total}` : ''}`;
+        note.classList.add('done');
+        setTimeout(() => el.remove(), 2600);
+        return;
+      }
+      dice.forEach(d => d.replaceChildren(face(1 + Math.floor(Math.random() * r.sides), r.sides)));
+    }, 90);
+  }
+
+  // ---------- the calculator (premium edition) ----------
+  function calculator() {
+    let shown = '0';
+    const display = h('div', { class: 'calc-display', 'aria-live': 'polite' }, shown);
+    const keys = ['7', '8', '9', '÷', '4', '5', '6', '×', '1', '2', '3', '−', '0', '.', '=', '+'];
+    const pad = h('div', { class: 'calc-pad' }, h('button', { class: 'calc-key fn', on: { click: paywall } }, 'C'),
+      h('button', { class: 'calc-key fn', on: { click: paywall } }, '±'), h('button', { class: 'calc-key fn', on: { click: paywall } }, '%'),
+      h('button', { class: 'calc-key fn', on: { click: paywall } }, '√'),
+      keys.map(k => h('button', { class: 'calc-key' + (k === '=' ? ' eq' : /[÷×−+]/.test(k) ? ' op' : ''), on: { click: paywall } }, k)));
+    U.modal('Calculator', h('div', { class: 'calc' }, display, pad), { onClose: () => document.querySelectorAll('.paywall').forEach(e => e.remove()) });
+  }
+
+  // A totally real, definitely not fake subscription screen.
+  function paywall() {
+    ui.paywalls = (ui.paywalls || 0) + 1;
+    const n = ui.paywalls;
+    const price = x => '$' + (x * Math.pow(3.7, n - 1)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    document.querySelectorAll('.paywall').forEach(e => e.remove());
+    const no = [`No thanks, I'll count on my fingers`, 'I can do math myself, actually', 'Please, I just want to add two numbers', 'Fine. Fingers it is.'][Math.min(3, n - 1)];
+    const plan = (name, cost, per, perks, hot) => h('div', { class: 'pw-plan' + (hot ? ' hot' : '') },
+      hot ? h('span', { class: 'pw-tag' }, 'Most popular') : null,
+      h('strong', null, name), h('div', { class: 'pw-price' }, cost, h('small', null, per)),
+      h('ul', null, perks.map(p => h('li', null, p))),
+      h('button', { class: 'btn ' + (hot ? 'primary' : ''), on: { click: e => {
+        e.currentTarget.textContent = ['Declined: Stars are not legal tender', 'Error 402: Not enough fans', 'Card declined (it was an Uma card)', 'Payment failed: try exhausting more Stars'][Math.floor(Math.random() * 4)];
+        e.currentTarget.disabled = true;
+      } } }, 'Subscribe'));
+    const el = h('div', { class: 'paywall', role: 'dialog', 'aria-label': 'Upgrade to Calculator Pro' },
+      h('div', { class: 'pw-card' },
+        h('p', { class: 'pw-eyebrow' }, n > 1 ? `Attempt #${n} · prices adjusted for demand` : 'Premium feature'),
+        h('h2', null, 'Uma Calc ', h('span', null, 'PRO™')),
+        h('p', { class: 'muted' }, n > 1 ? 'Still trying to press buttons? Bold. Our pricing has been updated to reflect your enthusiasm.' : 'Pressing calculator buttons is a premium feature. Choose a plan to unlock arithmetic.'),
+        h('div', { class: 'pw-plans' },
+          plan('Addition Pass', price(299.99), '/month', ['The + key', 'Up to 3 additions per Race', 'Email support (we read it eventually)']),
+          plan('Equals Unlimited', price(1499.99), '/week', ['The = key, unlimited', 'All four operations', 'Decimal point (beta)', 'A tiny gold star sticker'], true),
+          plan('Superhorse Math', price(9999.99), '/day', ['Everything above', 'Square roots of your enemies', 'Priority counting', 'One (1) motivational neigh'])),
+        h('button', { class: 'linkish pw-no', on: { click: () => el.remove() } }, no),
+        h('p', { class: 'pw-fine' }, 'Prices do not include tax, tips, or emotional damage. This is a joke. Nothing is for sale.')));
+    document.body.append(el);
+  }
+
   // Dice roll for who goes first: both dice tumble, ties roll again.
   function diceFx(s, opts = {}) {
     const PIPS = { 1: [5], 2: [1, 9], 3: [1, 5, 9], 4: [1, 3, 7, 9], 5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9] };
@@ -1386,6 +1478,8 @@ window.Table = (() => {
           h('button', { class: 'btn', on: { click: conjureModal } }, 'Conjure…'),
           h('button', { class: 'btn', on: { click: tokenModal } }, 'Token…'),
           h('button', { class: 'btn', on: { click: () => act('shuffleDeck') } }, 'Shuffle deck'),
+          h('button', { class: 'btn', on: { click: rollModal } }, '🎲 Roll dice…'),
+          h('button', { class: 'btn', on: { click: calculator } }, '🧮 Calculator'),
           h('button', { class: 'btn ghost', disabled: !s.arrows.some(a => a.by === my), on: { click: () => act('clearArrows') } }, 'Clear my arrows'),
           h('button', { class: 'btn ghost', disabled: !canUndo, title: canUndo ? 'Undo your last action' : 'Only your own last action can be undone', on: { click: () => act('undo') } }, 'Undo')),
         effectsBox(),

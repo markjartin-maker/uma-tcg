@@ -347,33 +347,7 @@ window.Game = (() => {
 
   // Holding a mini lane (only your cards there) is worth MINI_LANE_FANS,
   // scored automatically whenever a fight check ends.
-  // Not scored: when both players agreed to fight, or at the fight check
-  // right before the Race (unless HOLD_FANS_BEFORE_RACE is on).
-  // A hold that would reach FANS_TO_WIN starts a showdown instead.
-  function awardHolds(s) {
-    if (G().AUTO_HOLD_FANS === false) return;
-    if (s.fight && s.fight.result === 'fight') return;
-    if (s.ramp >= RAMPS() && !G().HOLD_FANS_BEFORE_RACE) return;
-    const pts = G().MINI_LANE_FANS ?? 50;
-    for (const l of ['mini0', 'mini1']) {
-      const owners = new Set((s.zones['lane:' + l] || []).map(i => s.cards[i]).filter(c => c && !c.attachedTo).map(c => c.owner));
-      if (owners.size !== 1) continue;
-      const pid = [...owners][0];
-      if (G().SHOWDOWN !== false && s.players[pid].fans + pts >= G().FANS_TO_WIN) {
-        if (s.showdown) { log(s, null, `${nameOf(s, pid)} holds ${LANE_LABEL[l]}, but a showdown is already coming.`); continue; }
-        s.showdown = { pid, lane: l, pts, active: false, made: s.round * 100 + s.ramp };
-        log(s, null, `${nameOf(s, pid)} holds ${LANE_LABEL[l]} and would reach ${G().FANS_TO_WIN} fans! No fans yet: a SHOWDOWN starts at the beginning of ${nameOf(s, opp(s, pid))}'s next turn.`);
-        continue;
-      }
-      s.players[pid].fans += pts;
-      log(s, null, `${nameOf(s, pid)} holds ${LANE_LABEL[l]}: +${pts} fans.`);
-    }
-    checkWinner(s);
-  }
-
-  // award = true when leaving an actual fight check (score held lanes).
   function leaveCheckpoint(s, award = false) {
-    if (award) awardHolds(s);
     s.fight = null;
     s.miniFight = false;
     if (s.ramp >= RAMPS()) { beginRace(s); return; }
@@ -404,13 +378,29 @@ window.Game = (() => {
     for (const c of list) settlePayment(s, c.iid);
   }
 
-  // Start of every Ramp: both players ready everything, channel Stars, draw 1.
+  // Holding: when a player's Units (or Units & tricks) step begins, they get
+  // MINI_LANE_FANS for each mini lane where only their cards are.
+  function scoreHolds(s, pid) {
+    if (G().AUTO_HOLD_FANS === false || s.phase !== 'ramp') return;
+    const pts = G().MINI_LANE_FANS ?? 50;
+    const held = ['mini0', 'mini1'].filter(l => {
+      const owners = new Set((s.zones['lane:' + l] || []).map(i => s.cards[i]).filter(c => c && !c.attachedTo).map(c => c.owner));
+      return owners.size === 1 && owners.has(pid);
+    });
+    if (!held.length) return;
+    s.players[pid].fans += pts * held.length;
+    log(s, null, `${nameOf(s, pid)} holds ${held.map(l => LANE_LABEL[l]).join(' and ')}: +${pts * held.length} fans.`);
+    checkWinner(s);
+  }
+
+  // Start of every Ramp: set up, then the first player's Units step begins.
   function startOfRamp(s) {
-    // A pending showdown starts on the opponent's next turn (a Ramp where they play units first).
-    if (s.showdown && !s.showdown.active && s.phase === 'ramp' && s.order[s.rampFirst] === opp(s, s.showdown.pid)) {
-      s.showdown.active = true;
-      log(s, null, `SHOWDOWN! ${nameOf(s, s.showdown.pid)} goes for the win. Settle it at the table, then press who won the showdown.`);
-    }
+    rampSetup(s);
+    scoreHolds(s, s.order[s.rampFirst]);
+  }
+
+  // Both players ready everything, channel Stars, draw 1.
+  function rampSetup(s) {
     if (G().FLOAT_CLEARS_EACH_RAMP !== false) for (const pid of s.order) if (s.players[pid].float) s.players[pid].float = { energy: 0, power: {} };
     if (G().AUTO_START_OF_RAMP === false) return;
     const notes = [];
@@ -451,7 +441,7 @@ window.Game = (() => {
       default: {
         const last = s.ramp >= RAMPS();
         return { title: last ? 'End of Ramp · Fight?' : `After Ramp ${s.ramp} · Fight?`, short: 'Fight?', who: null,
-          hint: `A mini lane is contested. Each player secretly chooses Fight or Refuse (refusing costs ${G().REFUSE_FIGHT_FANS ?? 50} fans). ${last && !G().HOLD_FANS_BEFORE_RACE ? 'Then the Race begins (holds are not scored here).' : `If nobody fights, whoever holds a mini lane alone gets +${G().MINI_LANE_FANS ?? 50} on Continue, then Ramp ${s.ramp + 1} begins.`}` };
+          hint: `A mini lane is contested. Each player secretly chooses Fight or Refuse (refusing costs ${G().REFUSE_FIGHT_FANS ?? 50} fans). Then ${last ? 'the Race begins' : `Ramp ${s.ramp + 1} begins`}.` };
       }
     }
   }
@@ -563,6 +553,18 @@ window.Game = (() => {
         checkWinner(s);
       } else log(s, me, `marked the showdown: ${nameOf(s, sd.pid)} failed. No fans.`);
       return null;
+    },
+
+    // Dice roll from the sidebar. The numbers are rolled in the browser and
+    // passed in, so both players see the same result.
+    rollDice(s, me, sides, results) {
+      sides = Math.max(2, Math.min(100, Number(sides) || 6));
+      results = (results || []).slice(0, 10).map(n => Math.max(1, Math.min(sides, Number(n) || 1)));
+      if (!results.length) throw new Error('Roll at least one die.');
+      s.rollSeq = (s.rollSeq || 0) + 1;
+      s.lastRoll = { n: s.rollSeq, by: me, sides, results };
+      const total = results.reduce((a, b) => a + b, 0);
+      return `rolled ${results.length}d${sides}: ${results.join(', ')}${results.length > 1 ? ` (total ${total})` : ''}`;
     },
 
     // Several actions at once (multi-select). Ones that don't apply are skipped.
@@ -877,6 +879,7 @@ window.Game = (() => {
         s.step++;
         const t = rampText(s);
         log(s, me, `passed. Now: ${t.title} (${nameOf(s, t.who)})`);
+        if (s.step === 1) scoreHolds(s, s.order[1 - s.rampFirst]);
         if (s.step === 2) revealFaceDown(s);
         return null;
       }

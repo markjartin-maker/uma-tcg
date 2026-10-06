@@ -302,7 +302,51 @@ window.App = (() => {
       matches: h('div', { class: 'stack' }),
       invites: h('div', { class: 'stack' }),
     };
-    el.append(h('div', { class: 'lobby' },
+    // Hero: a flashy banner with the title, quick actions and a fan of Superhorses.
+    const stats = h('div', { class: 'hero-stats' });
+    const fan = h('div', { class: 'hero-fan', 'aria-hidden': 'true' });
+    const quick = async () => {
+      const others = profiles.filter(p => p.id !== app.me.id);
+      const pick = others.find(p => online.has(p.id)) || others[0];
+      if (!pick) { U.toast('No friends to challenge yet.', 'error'); return; }
+      challenge(pick.id);
+    };
+    const title = 'UMA TCG';
+    const hero = h('section', { class: 'hero' },
+      h('div', { class: 'hero-bg', 'aria-hidden': 'true' }, h('div', { class: 'hero-lines' }), h('div', { class: 'hero-sweep' }),
+        Array.from({ length: 14 }, (_, i) => h('i', { class: 'hero-spark', style: { left: (7 + (i * 53) % 88) + '%', top: (10 + (i * 37) % 75) + '%', animationDelay: (i * 0.37 % 3).toFixed(2) + 's' } }))),
+      h('div', { class: 'hero-text' },
+        h('p', { class: 'hero-eyebrow' }, `Welcome back, ${app.me.name}`),
+        h('h1', { class: 'hero-title', 'aria-label': title }, [...title].map((ch, i) => h('span', { style: { animationDelay: (0.05 * i) + 's' }, 'aria-hidden': 'true' }, ch === ' ' ? '\u00a0' : ch))),
+        h('p', { class: 'hero-tag' }, 'Ramp up. Hold the lanes. Win the Race.'),
+        h('div', { class: 'hero-cta' },
+          h('button', { class: 'btn primary hero-btn', on: { click: quick } }, '⚡ Quick challenge'),
+          h('button', { class: 'btn hero-btn ghost', on: { click: () => go('decks') } }, 'Decks'),
+          h('button', { class: 'btn hero-btn ghost', on: { click: () => go('maker') } }, 'Make a card')),
+        stats),
+      fan);
+    // Cards lean toward the mouse.
+    hero.addEventListener('pointermove', e => {
+      const r = hero.getBoundingClientRect();
+      hero.style.setProperty('--mx', ((e.clientX - r.left) / r.width - 0.5).toFixed(3));
+      hero.style.setProperty('--my', ((e.clientY - r.top) / r.height - 0.5).toFixed(3));
+    });
+    hero.addEventListener('pointerleave', () => { hero.style.setProperty('--mx', 0); hero.style.setProperty('--my', 0); });
+    app.backend.listCards().then(cards => {
+      const leaders = cards.filter(c => c.card_type === 'superhorse');
+      const pick = (leaders.length >= 3 ? leaders : [...leaders, ...cards.filter(c => c.card_type !== 'superhorse' && c.rarity !== 'common')]).slice(0, 3);
+      fan.replaceChildren(...pick.map((c, i) => h('div', { class: 'hero-card', style: { '--i': i } }, Cards.render(c, { size: 'm' }))));
+      lobbyEls.cardCount = cards.length;
+      drawStats();
+    }).catch(() => {});
+    function drawStats() {
+      const others = profiles.filter(p => p.id !== app.me.id);
+      const chip = (n, label) => h('span', { class: 'hero-stat' }, h('b', null, n), label);
+      stats.replaceChildren(chip(others.filter(p => online.has(p.id)).length, ' online'), chip(others.length, ' friends'),
+        lobbyEls.cardCount != null ? chip(lobbyEls.cardCount, ' cards in the pool') : null);
+    }
+    lobbyEls.drawStats = drawStats;
+    el.append(hero, h('div', { class: 'lobby' },
       h('section', { class: 'panel' },
         h('h2', null, 'Friends'),
         h('p', { class: 'muted' }, 'Everyone on the friends list. A green dot means they have the site open.'),
@@ -321,8 +365,9 @@ window.App = (() => {
     ));
     drawInvites();
     profiles = await app.backend.listProfiles();
-    app.cleanup.push(app.backend.watchPresence(set => { online = set; drawLobbyLists(); }));
+    app.cleanup.push(app.backend.watchPresence(set => { online = set; drawLobbyLists(); drawStats(); }));
     drawLobbyLists();
+    drawStats();
   }
 
   // ---------- guest codes ----------
@@ -386,7 +431,7 @@ window.App = (() => {
   async function drawLobbyLists() {
     if (!lobbyEls || app.view !== 'play') return;
     const others = profiles.filter(p => p.id !== app.me.id);
-    lobbyEls.friends.replaceChildren(...(others.length ? others.map(p => h('li', null,
+    lobbyEls.friends.replaceChildren(...(others.length ? others.map((p, i) => h('li', { style: { animationDelay: (0.05 * i) + 's' } },
       h('span', { class: 'dot' + (online.has(p.id) ? ' on' : ''), title: online.has(p.id) ? 'Online' : 'Offline' }),
       h('span', { class: 'friend-name' }, p.display_name),
       h('button', { class: 'btn sm', on: { click: () => challenge(p.id) } }, 'Challenge'))) : [h('li', { class: 'muted' }, 'No friends have signed in yet.')]));

@@ -338,7 +338,7 @@ window.Anim = (() => {
     layer.addEventListener('click', skip);
     const { g, W, H } = makeCanvas(layer);
     const side = (s, cls, col) => h('div', { class: 'clash-side ' + cls, style: { '--c1': col[0], '--c2': col[1] } },
-      s.def ? Cards.render(s.def, { size: 'm' }) : h('div', { class: 'card card-back sz-m' }),
+      s.def ? Cards.render(s.def, { size: 'l' }) : h('div', { class: 'card card-back sz-l' }),
       h('span', { class: 'clash-name' }, s.name));
     layer.append(side(themSide, 'them', ct), side(meSide, 'me', cm), h('div', { class: 'clash-vs' }, 'VS'));
 
@@ -370,7 +370,8 @@ window.Anim = (() => {
     let boltMe = makeBolt(1), boltThem = makeBolt(-1);
     const P = particles();
     const quick = reduced();
-    const T_STRIKE = quick ? 0 : 450, T_MEET = quick ? 0 : 900, T_DICE = quick ? 900 : 2200, T_END = quick ? 1500 : 2900;
+    // Leaders arrive, bolts strike (~0.7s), clash and crackle (~2.8s), then the dice drop in.
+    const T_STRIKE = quick ? 0 : 700, T_MEET = quick ? 0 : 1250, T_DICE = quick ? 1600 : 4000, T_END = quick ? 2200 : 4700;
     const t0 = performance.now();
     let last = t0, raf = 0, diced = false, done = false, flash = 0;
 

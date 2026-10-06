@@ -55,7 +55,12 @@ window.Cards = (() => {
   // 'any' = only Signatures (any), 'mine' = only your own Superhorse's Signatures.
   const CONJURE_DEFAULT = { count: 1, kind: 'any', energyOp: 'any', energy: 2, powerOp: 'any', power: 1, colors: [], champion: 'any', tags: [], keywords: [], signature: 'no', dest: 'hand' };
   const CONJURE_SIG = [['no', 'No Signature cards'], ['color', 'Signature cards of this color'], ['any', 'Any Signature card'], ['mine', 'Signature cards of my Superhorse']];
-  const conjureOf = def => (def && def.conjure ? { ...CONJURE_DEFAULT, ...def.conjure } : null);
+  // A card can have several Conjures (stored as an array; older cards have one object).
+  const conjuresOf = def => {
+    if (!def || !def.conjure) return [];
+    return (Array.isArray(def.conjure) ? def.conjure : [def.conjure]).filter(Boolean).map(c => ({ ...CONJURE_DEFAULT, ...c }));
+  };
+  const conjureOf = def => conjuresOf(def)[0] || null;
   const cmp = (op, a, b) => op === 'eq' ? a === b : op === 'le' ? a <= b : op === 'ge' ? a >= b : true;
 
   // ctx: { src: the conjuring card's def, leaderId: the conjurer's Superhorse id (in a match) }
@@ -414,13 +419,14 @@ window.Cards = (() => {
     if (c.rarity && !RARITY[c.rarity]) errs.push('Pick a rarity.');
     if ((c.tags || []).length > 6) errs.push('At most 6 tags.');
     if ((c.tags || []).some(t => !String(t).trim() || String(t).length > 24)) errs.push('Tags can be 1–24 characters.');
-    if (c.conjure) {
-      const n = Number(c.conjure.count);
+    for (const cj of conjuresOf(c)) {
+      const n = Number(cj.count);
       if (!Number.isInteger(n) || n < 1 || n > 5) errs.push('Conjure count must be 1–5.');
     }
+    if (conjuresOf(c).length > 6) errs.push('At most 6 Conjures on one card.');
     for (const k of c.keywords || []) if (!KEYWORD[k] && !String(k).startsWith('x-')) errs.push(`Unknown keyword "${k}".`);
     return errs;
   }
 
-  return { CONJURE_SIG, KW_GROUPS, kwSlug, setCustomKeywords, SLEEVE_BORDERS, TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
+  return { CONJURE_SIG, KW_GROUPS, kwSlug, setCustomKeywords, SLEEVE_BORDERS, TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjuresOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
 })();

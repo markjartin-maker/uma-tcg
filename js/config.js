@@ -34,16 +34,10 @@ window.CONFIG = {
     // Set to false to play cards straight onto the table.
     USE_CHAIN: true,
     FANS_TO_WIN: 1000,
-    MINI_LANE_FANS: 50,   // holding a mini lane at end of Ramp
-    // Score MINI_LANE_FANS automatically for each mini lane a player holds
-    // (only their cards there) whenever a fight check ends.
+    MINI_LANE_FANS: 50,   // fans per mini lane you hold
+    // Holding: when your Units (or Units & tricks) step begins, you get
+    // MINI_LANE_FANS for each mini lane where only your cards are.
     AUTO_HOLD_FANS: true,
-    // Holds aren't scored at the fight check right before the Race, or when
-    // both players agreed to fight. Set true to score before the Race too.
-    HOLD_FANS_BEFORE_RACE: false,
-    // A hold that would reach FANS_TO_WIN starts a showdown on the opponent's
-    // next turn instead of winning right away.
-    SHOWDOWN: true,
     // Floating Energy / Power empties at the start of each Ramp.
     FLOAT_CLEARS_EACH_RAMP: true,
     RACE_FANS: 150,       // only your units left at end of Race
