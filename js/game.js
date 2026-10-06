@@ -388,7 +388,15 @@ window.Game = (() => {
       return owners.size === 1 && owners.has(pid);
     });
     if (!held.length) return;
-    s.players[pid].fans += pts * held.length;
+    const gain = pts * held.length;
+    // A hold that would win the match starts a showdown instead.
+    if (G().SHOWDOWN !== false && s.players[pid].fans + gain >= G().FANS_TO_WIN) {
+      if (s.showdown) { log(s, null, `${nameOf(s, pid)} holds ${held.map(l => LANE_LABEL[l]).join(' and ')}, but a showdown is already on.`); return; }
+      s.showdown = { pid, lane: held[0], lanes: held, pts: gain, active: false, made: s.round * 100 + s.ramp * 10 + s.step };
+      log(s, null, `${nameOf(s, pid)} holds ${held.map(l => LANE_LABEL[l]).join(' and ')} and would reach ${G().FANS_TO_WIN} fans! No fans yet: a SHOWDOWN starts at ${nameOf(s, opp(s, pid))}'s next Units step.`);
+      return;
+    }
+    s.players[pid].fans += gain;
     log(s, null, `${nameOf(s, pid)} holds ${held.map(l => LANE_LABEL[l]).join(' and ')}: +${pts * held.length} fans.`);
     checkWinner(s);
   }
@@ -396,7 +404,17 @@ window.Game = (() => {
   // Start of every Ramp: set up, then the first player's Units step begins.
   function startOfRamp(s) {
     rampSetup(s);
-    scoreHolds(s, s.order[s.rampFirst]);
+    unitsStepBegins(s, s.order[s.rampFirst]);
+  }
+
+  // A player's Units (or Units & tricks) step begins: a pending showdown
+  // against them starts now; otherwise they score their held lanes.
+  function unitsStepBegins(s, pid) {
+    if (s.showdown && !s.showdown.active && s.phase === 'ramp' && pid === opp(s, s.showdown.pid)) {
+      s.showdown.active = true;
+      log(s, null, `SHOWDOWN! ${nameOf(s, s.showdown.pid)} goes for the win (${(s.showdown.lanes || [s.showdown.lane]).map(l => LANE_LABEL[l]).join(' and ')}). Fight it out, then press who won the showdown.`);
+    }
+    scoreHolds(s, pid);
   }
 
   // Both players ready everything, channel Stars, draw 1.
@@ -879,7 +897,7 @@ window.Game = (() => {
         s.step++;
         const t = rampText(s);
         log(s, me, `passed. Now: ${t.title} (${nameOf(s, t.who)})`);
-        if (s.step === 1) scoreHolds(s, s.order[1 - s.rampFirst]);
+        if (s.step === 1) unitsStepBegins(s, s.order[1 - s.rampFirst]);
         if (s.step === 2) revealFaceDown(s);
         return null;
       }

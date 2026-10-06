@@ -38,6 +38,9 @@ window.CONFIG = {
     // Holding: when your Units (or Units & tricks) step begins, you get
     // MINI_LANE_FANS for each mini lane where only your cards are.
     AUTO_HOLD_FANS: true,
+    // A hold that would reach FANS_TO_WIN doesn't score: a showdown starts at
+    // the opponent's next Units step instead. Win it to get the fans.
+    SHOWDOWN: true,
     // Floating Energy / Power empties at the start of each Ramp.
     FLOAT_CLEARS_EACH_RAMP: true,
     RACE_FANS: 150,       // only your units left at end of Race

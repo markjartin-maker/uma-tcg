@@ -411,7 +411,7 @@ window.Table = (() => {
           bindDrop(box, null);
           return box;
         });
-        const sd = s.showdown && s.showdown.active && (s.showdown.lane === l || l === 'race');
+        const sd = s.showdown && s.showdown.active && ((s.showdown.lanes || [s.showdown.lane]).includes(l) || l === 'race');
         const el = h('div', { class: 'lane lane-' + l + (Object.keys(tint).length ? ' has-env' : '') + (sd ? ' showdown' : ''), dataset: { drop: l }, style: tint },
           h('div', { class: 'lane-head' }, h('span', { class: 'lane-name' }, Game.LANE_LABEL[l]),
             h('span', { class: 'lane-might', title: 'Total might (face-up units)' }, `${opMight} vs ${myMight}`)),
@@ -1230,7 +1230,7 @@ window.Table = (() => {
       actions.push(h('button', { class: 'btn fight', on: { click: () => act('showdownResult', true) } }, `${s.showdown.pid === my ? 'I' : nm} won`));
       actions.push(h('button', { class: 'btn', on: { click: () => act('showdownResult', false) } }, `${s.showdown.pid === my ? 'I' : nm} failed`));
     } else if (s.showdown) {
-      actions.push(h('span', { class: 'fight-note calm', title: 'Starts at the beginning of the other player\'s next turn' },
+      actions.push(h('span', { class: 'fight-note calm', title: 'Starts at the other player\'s next Units step' },
         `Showdown coming: ${s.showdown.pid === my ? 'you' : Game.nameOf(s, s.showdown.pid)}`));
     }
     if (s.phase === 'mulligan') {
@@ -1411,7 +1411,7 @@ window.Table = (() => {
     const nm = s.showdown.pid === me() ? 'You go' : `${Game.nameOf(s, s.showdown.pid)} goes`;
     const el = h('div', { class: 'sd-fx', 'aria-hidden': 'true' },
       h('span', { class: 'sd-word' }, 'Showdown'),
-      h('span', { class: 'sd-sub' }, `${nm} for the win · ${Game.LANE_LABEL[s.showdown.lane] || ''}`));
+      h('span', { class: 'sd-sub' }, `${nm} for the win · ${(s.showdown.lanes || [s.showdown.lane]).map(l => Game.LANE_LABEL[l]).join(' + ')}`));
     document.body.append(el);
     setTimeout(() => el.remove(), 2600);
   }
