@@ -59,18 +59,22 @@ window.Game = (() => {
       stars.forEach(iid => (s.cards[iid].zone = `${p.id}:stars`));
       for (let i = 0; i < G().STARTING_HAND; i++) drawOne(s, p.id);
     }
-    // Dice roll for who goes first (ties roll again).
+    // Dice roll for who goes first (a tie for the highest roll rolls again).
     const d6 = () => 1 + (crypto.getRandomValues(new Uint32Array(1))[0] % 6);
     s.dice = { rolls: [] };
-    let a, b;
-    do { a = d6(); b = d6(); s.dice.rolls.push([a, b]); } while (a === b && s.dice.rolls.length < 20);
-    if (a === b) b = a === 6 ? 5 : a + 1; // (practically never)
-    s.rampFirst = a > b ? 0 : 1;
+    let roll, top;
+    do {
+      roll = s.order.map(() => d6());
+      s.dice.rolls.push(roll);
+      top = Math.max(...roll);
+    } while (roll.filter(v => v === top).length > 1 && s.dice.rolls.length < 20);
+    if (roll.filter(v => v === top).length > 1) { roll = roll.map((v, i) => (v === top && i > roll.indexOf(top) ? v - 1 : v)); s.dice.rolls[s.dice.rolls.length - 1] = roll; }
+    s.rampFirst = roll.indexOf(Math.max(...roll));
     s.dice.first = s.order[s.rampFirst];
     const nm = i => s.players[s.order[i]].name;
     const ties = s.dice.rolls.length - 1;
-    log(s, null, `Dice roll: ${nm(0)} rolled ${a}, ${nm(1)} rolled ${b}${ties ? ` (after ${ties} tie${ties > 1 ? 's' : ''})` : ''}. ${nm(s.rampFirst)} plays units first.`);
-    log(s, null, 'Both players: keep your hand or mulligan.');
+    log(s, null, `Dice roll: ${s.order.map((p, i) => `${nm(i)} rolled ${roll[i]}`).join(', ')}${ties ? ` (after ${ties} tie${ties > 1 ? 's' : ''})` : ''}. ${nm(s.rampFirst)} plays units first.`);
+    log(s, null, `${s.order.length > 2 ? 'Everyone' : 'Both players'}: keep your hand or mulligan.`);
     return s;
   }
 
@@ -99,6 +103,22 @@ window.Game = (() => {
     return { p1: challenge.from_user, p2: challenge.to_user, state, defs };
   }
 
+  // A 3–4 player match from a full lobby room. room.members: [{ user, deck }]
+  async function buildRoomMatch(backend, room) {
+    const [decks, pool, profiles] = await Promise.all([
+      Promise.all(room.members.map(m => backend.getDeck(m.deck))), backend.listCards(), backend.listProfiles(),
+    ]);
+    if (decks.some(d => !d)) throw new Error('One of the decks no longer exists.');
+    const defs = {};
+    for (const c of pool) defs[c.id] = slimDef(c);
+    for (const t of Cards.TYPES) defs['star:' + t.id] = Cards.starDef(t.id);
+    for (const t of Cards.TOKENS) defs[t.id] = t;
+    const name = id => (profiles.find(p => p.id === id) || {}).display_name || 'Player';
+    const state = newMatchState(room.members.map((m, i) => ({ id: m.user, name: name(m.user), deck: decks[i] })), defs);
+    const ids = room.members.map(m => m.user);
+    return { p1: ids[0], p2: ids[1], players: ids, state, defs };
+  }
+
   function slimDef(c) {
     return { id: c.id, name: c.name, card_type: c.card_type, types: c.types, energy: c.energy, power: c.power,
       might: c.might, keywords: c.keywords || [], effect: c.effect || '', image_url: c.image_url || null,
@@ -111,6 +131,29 @@ window.Game = (() => {
   // ---------- helpers ----------
 
   const opp = (s, pid) => s.order.find(p => p !== pid);
+  // ---- players and steps (1v1, 1v1v1, 1v1v1v1) ----
+  const N = s => s.order.length;
+  const isMulti = s => s.order.length > 2;
+  const nextPlayer = (s, pid) => s.order[(s.order.indexOf(pid) + 1) % s.order.length];
+  const others = (s, pid) => s.order.filter(p => p !== pid);
+  // The fight check's step number: after 3 steps in 1v1, after 2N steps otherwise.
+  const CHECK = s => (isMulti(s) ? 2 * N(s) : 3);
+  // Who acts in a step and what kind it is.
+  //   1v1:  Units (A) → Units & tricks (B) → Tricks (A)
+  //   more: Units A → B → C (→ D), then Tricks back the other way (D →) C → B → A
+  function stepInfo(s, step = s.step, first = s.rampFirst) {
+    const n = N(s);
+    if (!isMulti(s)) {
+      if (step === 0) return { who: s.order[first], kind: 'units' };
+      if (step === 1) return { who: s.order[(first + 1) % n], kind: 'unitsTricks' };
+      if (step === 2) return { who: s.order[first], kind: 'tricks' };
+      return { who: null, kind: 'check' };
+    }
+    if (step < n) return { who: s.order[(first + step) % n], kind: 'units' };
+    if (step < 2 * n) return { who: s.order[(first + (2 * n - 1 - step)) % n], kind: 'tricks' };
+    return { who: null, kind: 'check' };
+  }
+  const firstTricksStep = s => (isMulti(s) ? N(s) : 2);
   const nameOf = (s, pid) => (s.players[pid] ? s.players[pid].name : 'Someone');
   const zoneKind = z => (z.startsWith('env:') ? 'env' : z.startsWith('lane:') ? z.slice(5) : z.split(':')[1]);
   const zoneOwner = z => (z.startsWith('lane:') || z.startsWith('env:') ? null : z.split(':')[0]);
@@ -340,9 +383,9 @@ window.Game = (() => {
       leaveCheckpoint(s, true);
       return;
     }
-    s.step = 3;
+    s.step = CHECK(s);
     s.fight = { choices: {}, result: null };
-    log(s, null, `Fight check: ${lanes.map(l => LANE_LABEL[l]).join(' and ')} ${lanes.length > 1 ? 'are' : 'is'} contested. Both players choose Fight or Refuse (secretly).`);
+    log(s, null, `Fight check: ${lanes.map(l => LANE_LABEL[l]).join(' and ')} ${lanes.length > 1 ? 'are' : 'is'} contested. ${isMulti(s) ? 'Everyone chooses' : 'Both players choose'} Fight or Refuse (secretly).`);
   }
 
   // Holding a mini lane (only your cards there) is worth MINI_LANE_FANS,
@@ -353,7 +396,7 @@ window.Game = (() => {
     if (s.ramp >= RAMPS()) { beginRace(s); return; }
     s.ramp++;
     s.step = 0;
-    s.rampFirst = 1 - s.rampFirst;
+    s.rampFirst = (s.rampFirst + 1) % N(s); // who goes first moves on each Ramp
     startOfRamp(s);
   }
 
@@ -393,7 +436,7 @@ window.Game = (() => {
     if (G().SHOWDOWN !== false && s.players[pid].fans + gain >= G().FANS_TO_WIN) {
       if (s.showdown) { log(s, null, `${nameOf(s, pid)} holds ${held.map(l => LANE_LABEL[l]).join(' and ')}, but a showdown is already on.`); return; }
       s.showdown = { pid, lane: held[0], lanes: held, pts: gain, active: false, made: s.round * 100 + s.ramp * 10 + s.step };
-      log(s, null, `${nameOf(s, pid)} holds ${held.map(l => LANE_LABEL[l]).join(' and ')} and would reach ${G().FANS_TO_WIN} fans! No fans yet: a SHOWDOWN starts at ${nameOf(s, opp(s, pid))}'s next Units step.`);
+      log(s, null, `${nameOf(s, pid)} holds ${held.map(l => LANE_LABEL[l]).join(' and ')} and would reach ${G().FANS_TO_WIN} fans! No fans yet: a SHOWDOWN starts at ${isMulti(s) ? 'the next Units step of another player' : `${nameOf(s, opp(s, pid))}'s next Units step`}.`);
       return;
     }
     s.players[pid].fans += gain;
@@ -410,7 +453,7 @@ window.Game = (() => {
   // A player's Units (or Units & tricks) step begins: a pending showdown
   // against them starts now; otherwise they score their held lanes.
   function unitsStepBegins(s, pid) {
-    if (s.showdown && !s.showdown.active && s.phase === 'ramp' && pid === opp(s, s.showdown.pid)) {
+    if (s.showdown && !s.showdown.active && s.phase === 'ramp' && pid !== s.showdown.pid) {
       s.showdown.active = true;
       log(s, null, `SHOWDOWN! ${nameOf(s, s.showdown.pid)} goes for the win (${(s.showdown.lanes || [s.showdown.lane]).map(l => LANE_LABEL[l]).join(' and ')}). Fight it out, then press who won the showdown.`);
     }
@@ -448,8 +491,15 @@ window.Game = (() => {
 
   function rampText(s) {
     const first = s.order[s.rampFirst];
-    const second = s.order[1 - s.rampFirst];
+    const second = s.order[(s.rampFirst + 1) % N(s)];
     const r = `Ramp ${s.ramp} of ${RAMPS()}`;
+    if (isMulti(s) && s.phase === 'ramp' && s.step < CHECK(s)) {
+      const st = stepInfo(s);
+      const nm = nameOf(s, st.who);
+      return st.kind === 'units'
+        ? { title: `${r} · Units`, short: 'Units', who: st.who, hint: `${nm} plays units.` }
+        : { title: `${r} · Tricks`, short: 'Tricks', who: st.who, hint: `${nm} plays tricks.${s.step === CHECK(s) - N(s) ? ' Face-down cards were revealed.' : ''}` };
+    }
     if (s.phase === 'mulligan') return { title: 'Mulligan', short: 'Mulligan', who: null, hint: 'Look at your starting hand. Keep it, or shuffle it back and draw a new one (once).' };
     if (s.phase === 'race') return { title: 'Race', short: 'Race', who: null, hint: `The mini lanes are one lane now. Assign might as combat damage to the other player's units. Reaction! and Duel cards can be played. If only your units are left at the end, gain +${G().RACE_FANS} fans.` };
     switch (s.step) {
@@ -459,7 +509,9 @@ window.Game = (() => {
       default: {
         const last = s.ramp >= RAMPS();
         return { title: last ? 'End of Ramp · Fight?' : `After Ramp ${s.ramp} · Fight?`, short: 'Fight?', who: null,
-          hint: `A mini lane is contested. Each player secretly chooses Fight or Refuse (refusing costs ${G().REFUSE_FIGHT_FANS ?? 50} fans). Then ${last ? 'the Race begins' : `Ramp ${s.ramp + 1} begins`}.` };
+          hint: isMulti(s)
+            ? `A mini lane is contested. Everyone secretly chooses Fight or Refuse. If two or more choose Fight, they fight; if only one does, they get +${G().MULTI_LONE_FIGHT_FANS ?? 50} fans. Then ${last ? 'the Race begins' : `Ramp ${s.ramp + 1} begins`}.`
+            : `A mini lane is contested. Each player secretly chooses Fight or Refuse (refusing costs ${G().REFUSE_FIGHT_FANS ?? 50} fans). Then ${last ? 'the Race begins' : `Ramp ${s.ramp + 1} begins`}.` };
       }
     }
   }
@@ -475,17 +527,19 @@ window.Game = (() => {
     // lasts until the next Units step (so the last one includes the Race).
     const turns = [];
     for (let r = 1; r <= RAMPS(); r++) {
-      const firstIdx = ((s.phase === 'mulligan' ? s.rampFirst : s.rampFirst + (r - s.ramp)) % 2 + 2) % 2;
-      const first = s.order[firstIdx], second = s.order[1 - firstIdx];
-      turns.push({ start: segs.length, who: first, n: (s.round - 1) * RAMPS() + r });
-      segs.push({ group: `Ramp ${r}`, label: 'Units', who: first, key: `r${r}s0` });
-      segs.push({ group: `Ramp ${r}`, label: 'Units & tricks', who: second, key: `r${r}s1` });
-      segs.push({ group: `Ramp ${r}`, label: 'Tricks', who: first, key: `r${r}s2` });
-      if (isCheckpoint(s, r)) segs.push({ group: r === RAMPS() ? 'End' : 'Fight', label: 'Fight?', who: null, key: `r${r}s3` });
+      const n = N(s);
+      const firstIdx = (((s.rampFirst + (r - s.ramp)) % n) + n) % n;
+      turns.push({ start: segs.length, who: s.order[firstIdx], n: (s.round - 1) * RAMPS() + r });
+      for (let i = 0; i < CHECK(s); i++) {
+        const st = stepInfo(s, i, firstIdx);
+        const label = { units: 'Units', unitsTricks: 'Units & tricks', tricks: 'Tricks' }[st.kind];
+        segs.push({ group: `Ramp ${r}`, label, kind: st.kind, who: st.who, key: `r${r}s${i}` });
+      }
+      if (isCheckpoint(s, r)) segs.push({ group: r === RAMPS() ? 'End' : 'Fight', label: 'Fight?', kind: 'check', who: null, key: `r${r}s${CHECK(s)}` });
     }
     segs.push({ group: 'Race', label: 'Race', who: null, key: 'race' });
     turns.forEach((t, i) => { t.end = i < turns.length - 1 ? turns[i + 1].start - 1 : segs.length - 1; });
-    const key = s.phase === 'mulligan' ? 'mull' : s.phase === 'race' ? 'race' : `r${s.ramp}s${Math.min(s.step, 3)}`;
+    const key = s.phase === 'mulligan' ? 'mull' : s.phase === 'race' ? 'race' : `r${s.ramp}s${Math.min(s.step, CHECK(s))}`;
     index = Math.max(0, segs.findIndex(x => x.key === key));
     return { segs, index, turns };
   }
@@ -667,7 +721,7 @@ window.Game = (() => {
       const nm = cardName(s, iid, false);
       // remove it from the chain too, if it's there
       const ci = s.chain.findIndex(x => x.iid === iid);
-      if (ci >= 0) { s.chain.splice(ci, 1); s.priority = s.chain.length ? opp(s, s.chain[s.chain.length - 1].by) : null; }
+      if (ci >= 0) { s.chain.splice(ci, 1); s.priority = s.chain.length ? nextPlayer(s, s.chain[s.chain.length - 1].by) : null; }
       if (c.token) { moveCard(s, iid, 'trash'); return `banished a ${nm} token`; }
       moveCard(s, iid, 'banish');
       return `banished ${nm}`;
@@ -729,14 +783,14 @@ window.Game = (() => {
       if (def && def.card_type === 'uma' && !opts.attachTo && dest && dest !== 'trash') {
         moveCard(s, iid, dest);
         s.chain.push({ n: ++s.chainSeq, kind: 'unit', iid, by: me, dest, from });
-        s.priority = opp(s, me);
+        s.priority = nextPlayer(s, me);
         return `${responding ? 'responded with' : 'played'} ${cardName(s, iid, false)} (${chainDestText(s, s.chain[s.chain.length - 1])})`;
       }
       detachFromZone(s, iid);
       resetCard(c);
       place(s, iid, 'shared:chain');
       s.chain.push({ n: ++s.chainSeq, kind: 'play', iid, by: me, dest: dest || null, attachTo: opts.attachTo || null, from });
-      s.priority = opp(s, me);
+      s.priority = nextPlayer(s, me);
       return `${responding ? 'responded with' : 'played'} ${cardName(s, iid, false)} (${chainDestText(s, s.chain[s.chain.length - 1])})`;
     },
 
@@ -745,7 +799,7 @@ window.Game = (() => {
       if (!BOARD.includes(zoneKind(c.zone))) throw new Error('Only cards in play can use abilities.');
       const responding = s.chain.length > 0;
       s.chain.push({ n: ++s.chainSeq, kind: 'ability', iid, by: me });
-      s.priority = opp(s, me);
+      s.priority = nextPlayer(s, me);
       return `${responding ? 'responded with' : 'used'} ${cardName(s, iid)}'s ability`;
     },
 
@@ -765,7 +819,7 @@ window.Game = (() => {
         else moveCard(s, item.iid, item.dest && item.dest !== 'attach' ? item.dest : 'base');
         text = `resolved ${nm}`;
       }
-      s.priority = s.chain.length ? opp(s, s.chain[s.chain.length - 1].by) : null;
+      s.priority = s.chain.length ? nextPlayer(s, s.chain[s.chain.length - 1].by) : null;
       return text;
     },
 
@@ -782,7 +836,7 @@ window.Game = (() => {
         text = `countered ${cardName(s, item.iid, false)}`;
         moveCard(s, item.iid, 'trash');
       }
-      s.priority = s.chain.length ? opp(s, s.chain[s.chain.length - 1].by) : null;
+      s.priority = s.chain.length ? nextPlayer(s, s.chain[s.chain.length - 1].by) : null;
       return text;
     },
 
@@ -793,7 +847,7 @@ window.Game = (() => {
       if (i !== s.chain.length - 1) throw new Error('Something was played on top of it. Resolve or counter that first.');
       s.chain.pop();
       if (item.kind === 'play' || item.kind === 'unit') moveCard(s, item.iid, item.from === 'champion' ? 'champion' : 'hand');
-      s.priority = s.chain.length ? opp(s, s.chain[s.chain.length - 1].by) : null;
+      s.priority = s.chain.length ? nextPlayer(s, s.chain[s.chain.length - 1].by) : null;
       return `took back ${item.kind === 'play' ? 'a card' : 'an ability'}`;
     },
 
@@ -820,10 +874,10 @@ window.Game = (() => {
       return `detached ${cardName(s, iid)}`;
     },
 
-    give(s, me, iid) {
+    give(s, me, iid, toPid) {
       const c = s.cards[iid];
       if (c.token) throw new Error("Tokens can't go to a hand. Trash it instead.");
-      const to = opp(s, c.owner);
+      const to = toPid && s.players[toPid] && toPid !== c.owner ? toPid : nextPlayer(s, c.owner);
       const nm = cardName(s, iid);
       detachFromZone(s, iid);
       for (const k of attachmentsOf(s, iid)) s.cards[k].attachedTo = null;
@@ -891,14 +945,15 @@ window.Game = (() => {
 
     nextStep(s, me) {
       // (An open chain doesn't stop the turn from moving on.)
-      if (s.phase === 'mulligan') throw new Error('Both players need to keep or mulligan first.');
-      if (s.phase !== 'ramp' || s.step >= 3) throw new Error('Use the buttons for the fight check or the Race.');
-      if (s.step < 2) {
+      if (s.phase === 'mulligan') throw new Error('Everyone needs to keep or mulligan first.');
+      if (s.phase !== 'ramp' || s.step >= CHECK(s)) throw new Error('Use the buttons for the fight check or the Race.');
+      if (s.step < CHECK(s) - 1) {
         s.step++;
         const t = rampText(s);
         log(s, me, `passed. Now: ${t.title} (${nameOf(s, t.who)})`);
-        if (s.step === 1) unitsStepBegins(s, s.order[1 - s.rampFirst]);
-        if (s.step === 2) revealFaceDown(s);
+        const st = stepInfo(s);
+        if (st.kind === 'units' || st.kind === 'unitsTricks') unitsStepBegins(s, st.who);
+        if (s.step === firstTricksStep(s)) revealFaceDown(s);
         return null;
       }
       log(s, me, 'passed.');
@@ -909,11 +964,32 @@ window.Game = (() => {
 
     // Secret choice at a fight check. The other player only sees that you chose.
     fightChoice(s, me, choice) {
-      if (s.step !== 3 || !s.fight) throw new Error('There is no fight check right now.');
-      if (s.fight.result) throw new Error('Both players already chose.');
+      if (s.step !== CHECK(s) || !s.fight) throw new Error('There is no fight check right now.');
+      if (s.fight.result) throw new Error('Everyone already chose.');
       s.fight.choices[me] = choice === 'fight' ? 'fight' : 'refuse';
-      if (!s.order.every(pid => s.fight.choices[pid])) return 'made their choice';
+      if (!s.order.every(pid => s.fight.choices[pid] || (s.players[pid] && s.players[pid].out))) return 'made their choice';
       log(s, me, 'made their choice');
+      if (isMulti(s)) {
+        // 3–4 players: whoever chose Fight fights. A lone fighter gets fans instead.
+        const fighters = s.order.filter(pid => s.fight.choices[pid] === 'fight');
+        const bonus = G().MULTI_LONE_FIGHT_FANS ?? 50;
+        if (fighters.length >= 2) {
+          s.fight.result = 'fight';
+          s.fight.fighters = fighters;
+          s.miniFight = true;
+          const out = s.order.filter(pid => !fighters.includes(pid));
+          log(s, null, `${fighters.map(p => nameOf(s, p)).join(', ')} fight in the mini lanes!${out.length ? ` ${out.map(p => nameOf(s, p)).join(', ')} sit${out.length > 1 ? '' : 's'} out.` : ''}`);
+        } else if (fighters.length === 1) {
+          s.fight.result = 'refused';
+          s.players[fighters[0]].fans += bonus;
+          log(s, null, `Only ${nameOf(s, fighters[0])} wanted to fight: +${bonus} fans. No fight.`);
+        } else {
+          s.fight.result = 'refused';
+          log(s, null, 'Nobody wanted to fight.');
+        }
+        checkWinner(s);
+        return null;
+      }
       const refusers = s.order.filter(pid => s.fight.choices[pid] === 'refuse');
       const cost = G().REFUSE_FIGHT_FANS ?? 50;
       for (const pid of refusers) s.players[pid].fans -= cost;
@@ -932,8 +1008,8 @@ window.Game = (() => {
 
     // Move on from a fight check (to the next Ramp, or into the Race).
     continueOn(s, me) {
-      if (s.step !== 3) throw new Error('Nothing to continue from.');
-      if (s.fight && !s.fight.result) throw new Error('Both players choose Fight or Refuse first.');
+      if (s.step !== CHECK(s)) throw new Error('Nothing to continue from.');
+      if (s.fight && !s.fight.result) throw new Error('Everyone chooses Fight or Refuse first.');
       log(s, me, s.ramp >= RAMPS() ? 'began the Race.' : `moved on to Ramp ${s.ramp + 1}.`);
       leaveCheckpoint(s, true);
       return null;
@@ -966,7 +1042,7 @@ window.Game = (() => {
       s.step = 0;
       s.ramp = 1;
       s.round++;
-      s.rampFirst = 1 - s.rampFirst;
+      s.rampFirst = (s.rampFirst + 1) % N(s);
       s.arrows = [];
       log(s, me, `ended the Race. Round ${s.round}: ${nameOf(s, s.order[s.rampFirst])} plays units first.`);
       startOfRamp(s);
@@ -1001,8 +1077,12 @@ window.Game = (() => {
     },
 
     concede(s, me) {
-      s.winner = opp(s, me);
-      return 'conceded';
+      if (!isMulti(s)) { s.winner = opp(s, me); return 'conceded'; }
+      // 3–4 players: you're out; the last one standing wins.
+      s.players[me].out = true;
+      const left = s.order.filter(pid => !s.players[pid].out);
+      if (left.length === 1) s.winner = left[0];
+      return left.length === 1 ? `conceded. ${nameOf(s, left[0])} wins!` : 'conceded and is out of the match';
     },
   };
 
@@ -1019,7 +1099,7 @@ window.Game = (() => {
     if (!state.zones['shared:chain']) state.zones['shared:chain'] = [];
     for (const k of ENV_SLOTS) if (!state.zones[k]) state.zones[k] = [];
     for (const pid of state.order) for (const z of PLAYER_ZONES) if (!state.zones[`${pid}:${z}`]) state.zones[`${pid}:${z}`] = [];
-    if (state.phase === 'ramp' && state.step === 3 && !state.fight) state.fight = { choices: {}, result: null };
+    if (state.phase === 'ramp' && state.step === CHECK(state) && !state.fight) state.fight = { choices: {}, result: null };
     if (!state.mulligan) state.mulligan = {};
     const snapshot = U.clone(state);
     snapshot.undo = null;
@@ -1037,5 +1117,6 @@ window.Game = (() => {
     LANES, LANE_LABEL, BOARD, newMatchState, buildMatch, slimDef, apply, isHidden, opp, nameOf,
     ENV_SLOTS, ENV_LABEL, zoneKind, zoneOwner, rampText, phaseTrack, attachmentsOf, chainDestText,
     shownExhausted, contestedLanes, isCheckpoint, RAMPS,
+    buildRoomMatch, isMulti, nextPlayer, others, CHECK, stepInfo,
   };
 })();

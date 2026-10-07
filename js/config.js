@@ -23,6 +23,8 @@ window.CONFIG = {
     MID_FIGHT_AFTER_RAMP: 2,
     MID_FIGHT_FROM_ROUND: 2,
     REFUSE_FIGHT_FANS: 50, // fans lost for refusing a fight
+    // 3–4 player matches: if only one player chooses Fight, they get this many fans.
+    MULTI_LONE_FIGHT_FANS: 50,
     // Units moved between base and lanes become exhausted automatically.
     EXHAUST_ON_MOVE: true,
     SIGNATURES_PER_DECK: 3, // max Signature cards (of your Champion) per deck

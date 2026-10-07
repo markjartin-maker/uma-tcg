@@ -9,6 +9,8 @@ window.DemoBackend = class DemoBackend {
     this.users = [
       { id: 'u-you', display_name: 'Player 1' },
       { id: 'u-rival', display_name: 'Rival' },
+      { id: 'u-rival2', display_name: 'Rival 2' },
+      { id: 'u-rival3', display_name: 'Rival 3' },
     ];
     this.cards = DemoBackend.samplePool();
     this.decks = DemoBackend.sampleDecks(this.cards);
@@ -144,13 +146,58 @@ window.DemoBackend = class DemoBackend {
 
   // ----- matches -----
   async listMatches() {
-    return Object.values(this.matches).map(m => ({ id: m.id, p1: m.p1, p2: m.p2, status: m.status, updated_at: m.updated_at }))
+    return Object.values(this.matches).map(m => ({ id: m.id, p1: m.p1, p2: m.p2, players: m.players || null, status: m.status, updated_at: m.updated_at }))
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }
-  async createMatch({ p1, p2, state, defs }) {
+  async createMatch({ p1, p2, players, state, defs }) {
     const id = U.uid();
-    this.matches[id] = { id, p1, p2, state, defs, version: 0, status: 'active', updated_at: new Date().toISOString() };
+    this.matches[id] = { id, p1, p2, players: players || null, state, defs, version: 0, status: 'active', updated_at: new Date().toISOString() };
     return id;
+  }
+
+  // ----- rooms (1v1v1 / 1v1v1v1) -----
+  // In the demo, pretend friends drop into your room one by one.
+  async listRooms() { return (this.rooms || []).filter(r => ['open', 'started'].includes(r.status)).map(r => U.clone(r)); }
+  emitRooms() { this.listRooms().then(list => (this.listeners.rooms || new Set()).forEach(cb => cb(list))); }
+  watchRooms(cb) {
+    (this.listeners.rooms = this.listeners.rooms || new Set()).add(cb);
+    this.listRooms().then(cb);
+    return () => this.listeners.rooms.delete(cb);
+  }
+  async createRoom(size, deckId) {
+    this.rooms = this.rooms || [];
+    const room = { id: U.uid(), host: this.me.id, size, members: [{ user: this.me.id, deck: deckId }], status: 'open', match_id: null, created_at: new Date().toISOString() };
+    this.rooms.unshift(room);
+    this.emitRooms();
+    const bots = this.users.filter(u => u.id !== this.me.id).slice(0, size - 1);
+    bots.forEach((u, i) => setTimeout(() => {
+      if (room.status !== 'open' || room.members.length >= room.size) return;
+      const deck = this.decks.find(d => d.owner === 'u-rival') || this.decks[0];
+      room.members.push({ user: u.id, deck: deck.id });
+      this.emitRooms();
+    }, 900 + i * 900));
+    return U.clone(room);
+  }
+  async joinRoom(id, deckId) {
+    const r = (this.rooms || []).find(x => x.id === id);
+    if (!r || r.status !== 'open') throw new Error('That room is no longer open.');
+    if (!r.members.some(m => m.user === this.me.id)) {
+      if (r.members.length >= r.size) throw new Error('That room is full.');
+      r.members.push({ user: this.me.id, deck: deckId });
+    }
+    this.emitRooms();
+    return U.clone(r);
+  }
+  async leaveRoom(id) {
+    const r = (this.rooms || []).find(x => x.id === id);
+    if (!r || r.status !== 'open') return;
+    if (r.host === this.me.id) r.status = 'cancelled'; else r.members = r.members.filter(m => m.user !== this.me.id);
+    this.emitRooms();
+  }
+  async markRoomStarted(id, matchId) {
+    const r = (this.rooms || []).find(x => x.id === id);
+    if (r && r.status === 'open') { r.status = 'started'; r.match_id = matchId; }
+    this.emitRooms();
   }
   async getMatch(id) { return U.clone(this.matches[id]); }
   async commitMatch(id, fn) {

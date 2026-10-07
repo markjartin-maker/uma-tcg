@@ -429,5 +429,90 @@ window.Anim = (() => {
     }
   }
 
-  return { PRESETS, PRESET_DEFAULT, CODE_TEMPLATE, setLibrary, list, get, play, stop, prefs, setPrefs, colorsOf, clash };
+  // ---------- clash intro for 3–4 players ----------
+  // sides[0] is the viewer (bottom-left); the others take the other corners.
+  // Every player's bolt strikes from their corner into the middle.
+  function clashAll(sides, onDice) {
+    const layer = layerEl('clash multi');
+    layer.style.pointerEvents = 'auto';
+    const { g, W, H } = makeCanvas(layer);
+    const CORNERS = [
+      { cls: 'me', x: -30, y: H + 30 },        // bottom-left (you)
+      { cls: 'them', x: W + 30, y: -30 },      // top-right
+      { cls: 'tl', x: -30, y: -30 },           // top-left
+      { cls: 'br', x: W + 30, y: H + 30 },     // bottom-right
+    ];
+    const C = { x: W / 2, y: H / 2 };
+    const ps = sides.slice(0, 4).map((sd, i) => {
+      const col = colorsOf(sd.def);
+      const corner = CORNERS[i];
+      layer.append(h('div', { class: 'clash-side ' + corner.cls, style: { '--c1': col[0], '--c2': col[1] } },
+        sd.def ? Cards.render(sd.def, { size: 'l' }) : h('div', { class: 'card card-back sz-l' }),
+        h('span', { class: 'clash-name' }, sd.name)));
+      const gr = g.createLinearGradient(corner.x, corner.y, C.x, C.y);
+      gr.addColorStop(0, col[0]); gr.addColorStop(1, col[1]);
+      const make = () => {
+        const pts = boltPath(corner, { x: C.x + rnd(-8, 8), y: C.y + rnd(-8, 8) }, 0.18, 6);
+        return pts.map((q, k) => ({ ...q, t: k / (pts.length - 1) }));
+      };
+      return { col, corner, gr, bolt: make(), make };
+    });
+    layer.append(h('div', { class: 'clash-vs' }, 'CLASH'));
+    const P = particles();
+    const quick = reduced();
+    const T_STRIKE = quick ? 0 : 700, T_MEET = quick ? 0 : 1250, T_DICE = quick ? 1600 : 4000, T_END = quick ? 2200 : 4700;
+    const t0 = performance.now();
+    let last = t0, raf = 0, diced = false, done = false;
+    layer.addEventListener('click', () => finish(true));
+    function draw(now) {
+      const el = now - t0;
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      if (el >= T_DICE && !diced) { diced = true; layer.classList.add('out'); if (onDice) onDice(); }
+      if (el >= T_END) { finish(false); return; }
+      g.clearRect(0, 0, W, H);
+      const p = clamp((el - T_STRIKE) / (T_MEET - T_STRIKE || 1), 0, 1);
+      if (el >= T_STRIKE) {
+        g.globalCompositeOperation = 'lighter';
+        for (const pl of ps) {
+          if (!quick && Math.random() < 0.5) pl.bolt = pl.make();
+          drawBolt(g, p >= 1 ? pl.bolt : pl.bolt.filter(q => q.t <= p), pl.gr, pl.col[0], 1.1);
+        }
+        if (p >= 1) {
+          const pulse = 0.75 + 0.25 * Math.sin(now / 45);
+          const r = Math.min(W, H) * 0.18 * pulse;
+          const grd = g.createRadialGradient(C.x, C.y, 0, C.x, C.y, r);
+          grd.addColorStop(0, 'rgba(255,255,255,.95)');
+          ps.forEach((pl, i) => grd.addColorStop(0.2 + 0.5 * (i + 1) / (ps.length + 1), rgba(pl.col[i % 2], 0.55)));
+          grd.addColorStop(1, 'rgba(0,0,0,0)');
+          g.fillStyle = grd; g.fillRect(0, 0, W, H);
+          // sparks fly back toward each player's corner
+          if (!diced) for (const pl of ps) {
+            const dx = pl.corner.x - C.x, dy = pl.corner.y - C.y, len = Math.hypot(dx, dy) || 1;
+            for (let k = 0; k < 2; k++) {
+              const v = rnd(160, 460), a = rnd(-0.5, 0.5);
+              const ux = dx / len, uy = dy / len;
+              P.add({ x: C.x, y: C.y, vx: (ux * Math.cos(a) - uy * Math.sin(a)) * v, vy: (ux * Math.sin(a) + uy * Math.cos(a)) * v,
+                max: rnd(0.5, 1), size: rnd(1.8, 3.6), color: pl.col[Math.random() < 0.5 ? 0 : 1], drag: 0.97 });
+            }
+          }
+        }
+        P.step(dt, g, now);
+        g.globalCompositeOperation = 'source-over';
+      }
+      const flash = el >= T_MEET && !quick ? Math.max(0, 0.55 * (1 - (el - T_MEET) / 320)) : 0;
+      if (flash > 0.01) { g.fillStyle = `rgba(255,255,255,${flash})`; g.fillRect(0, 0, W, H); }
+      raf = requestAnimationFrame(draw);
+    }
+    raf = requestAnimationFrame(draw);
+    function finish(skipped) {
+      if (done) return;
+      done = true;
+      cancelAnimationFrame(raf);
+      if (!diced && onDice) onDice();
+      if (skipped) { layer.classList.add('out'); setTimeout(() => layer.remove(), 300); } else layer.remove();
+    }
+  }
+
+  return { PRESETS, PRESET_DEFAULT, CODE_TEMPLATE, setLibrary, list, get, play, stop, prefs, setPrefs, colorsOf, clash, clashAll };
 })();

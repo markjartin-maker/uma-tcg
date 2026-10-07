@@ -199,6 +199,8 @@ window.App = (() => {
   function afterLogin() {
     loadKeywords();
     loadAnimations();
+    firstRoomList = true;
+    if (app.backend.watchRooms) app.lobbyCleanup.push(app.backend.watchRooms(onRooms));
     // Challenges that were already accepted before this page loaded are old:
     // don't jump into those matches (they're listed under "Your matches").
     firstChallengeList = true;
@@ -266,6 +268,100 @@ window.App = (() => {
     });
   }
 
+  // ---------- rooms (1v1v1 / 1v1v1v1) ----------
+  let rooms = [];
+  let firstRoomList = true;
+  const startingRooms = new Set();
+  const sizeLabel = n => (n === 4 ? '1v1v1v1' : '1v1v1');
+  const inRoom = r => r.members.some(m => m.user === app.me.id);
+
+  async function onRooms(list) {
+    rooms = list;
+    if (firstRoomList) {
+      // Rooms that started before this page loaded are old: don't jump into them.
+      firstRoomList = false;
+      for (const r of list) if (r.status === 'started') app.opened.add('room-' + r.id);
+    }
+    const known = id => profiles.some(p => p.id === id);
+    if (list.some(r => r.members.some(m => !known(m.user)))) profiles = await app.backend.listProfiles();
+    for (const r of list) {
+      if (!inRoom(r)) continue;
+      // Our room started → open the table.
+      if (r.status === 'started' && r.match_id && !app.opened.has('room-' + r.id)) {
+        app.opened.add('room-' + r.id);
+        U.toast(`${sizeLabel(r.size)} is starting!`, 'good');
+        go('match', r.match_id);
+        continue;
+      }
+      // Full room: the player who filled the last seat starts it; the host
+      // starts it too if that hasn't happened after a few seconds.
+      if (r.status === 'open' && r.members.length >= r.size) {
+        const last = r.members[r.members.length - 1].user === app.me.id;
+        if (last) startRoom(r);
+        else if (r.host === app.me.id) setTimeout(() => {
+          const cur = rooms.find(x => x.id === r.id);
+          if (cur && cur.status === 'open' && cur.members.length >= cur.size) startRoom(cur);
+        }, app.backend.mode === 'demo' ? 400 : 4000);
+      }
+    }
+    if (app.view === 'play') drawRooms();
+  }
+
+  async function startRoom(r) {
+    if (startingRooms.has(r.id)) return;
+    startingRooms.add(r.id);
+    try {
+      const built = await Game.buildRoomMatch(app.backend, r);
+      const matchId = await app.backend.createMatch(built);
+      await app.backend.markRoomStarted(r.id, matchId);
+    } catch (e) { U.toast(e.message, 'error'); startingRooms.delete(r.id); }
+  }
+
+  async function openRoom(size) {
+    const deckId = await pickDeck(`Open a ${sizeLabel(size)} room`, 'Open room');
+    if (!deckId) return;
+    try { await app.backend.createRoom(size, deckId); U.toast(`Room open. Waiting for ${size - 1} more player${size > 2 ? 's' : ''}…`, 'good'); }
+    catch (e) { U.toast(e.message, 'error'); }
+  }
+
+  async function joinRoom(r) {
+    const deckId = await pickDeck(`Join ${who(r.host)}'s ${sizeLabel(r.size)}`, 'Join');
+    if (!deckId) return;
+    try {
+      const after = await app.backend.joinRoom(r.id, deckId);
+      if (after && after.members && after.members.length >= after.size) onRooms(await app.backend.listRooms());
+    } catch (e) { U.toast(e.message, 'error'); }
+  }
+
+  function drawRooms() {
+    if (!lobbyEls || !lobbyEls.rooms) return;
+    const visible = rooms.filter(r => r.status === 'open' || (r.status === 'started' && inRoom(r)));
+    lobbyEls.rooms.replaceChildren(
+      h('div', { class: 'row wrap' },
+        h('button', { class: 'btn', on: { click: () => openRoom(3) } }, '+ 1v1v1 room'),
+        h('button', { class: 'btn', on: { click: () => openRoom(4) } }, '+ 1v1v1v1 room')),
+      ...(visible.length ? visible.map(r => {
+        const mine = inRoom(r);
+        const full = r.members.length >= r.size;
+        const seats = Array.from({ length: r.size }, (_, i) => {
+          const m = r.members[i];
+          return h('span', { class: 'seat' + (m ? ' taken' : '') + (m && m.user === app.me.id ? ' me' : '') },
+            m ? (m.user === app.me.id ? 'You' : who(m.user)) : 'Open seat');
+        });
+        let action;
+        if (r.status === 'started') action = h('button', { class: 'btn sm primary', on: { click: () => go('match', r.match_id) } }, 'Open table');
+        else if (mine) action = h('div', { class: 'row' },
+          full && r.host === app.me.id ? h('button', { class: 'btn sm primary', on: { click: () => startRoom(r) } }, 'Start') : null,
+          h('button', { class: 'btn sm ghost', on: { click: () => app.backend.leaveRoom(r.id).catch(e => U.toast(e.message, 'error')) } }, r.host === app.me.id ? 'Close room' : 'Leave'));
+        else action = full ? h('span', { class: 'muted' }, 'Full') : h('button', { class: 'btn sm primary', on: { click: () => joinRoom(r) } }, 'Join');
+        return h('div', { class: 'room-row' + (mine ? ' mine' : '') },
+          h('div', { class: 'room-head' }, h('strong', null, sizeLabel(r.size)), h('span', { class: 'muted' }, `· ${who(r.host)}'s room`),
+            h('span', { class: 'pill' + (r.status === 'started' ? ' live' : '') }, r.status === 'started' ? 'Playing' : `${r.members.length}/${r.size}`)),
+          h('div', { class: 'seats' }, seats),
+          action);
+      }) : [h('p', { class: 'muted' }, 'No rooms open. Open one, and friends can join from their lobby.')]));
+  }
+
   async function challenge(userId) {
     const deckId = await pickDeck(`Challenge ${who(userId)}`, 'Send');
     if (!deckId) return;
@@ -300,6 +396,7 @@ window.App = (() => {
       friends: h('ul', { class: 'friend-list' }),
       incoming: h('div', { class: 'stack' }),
       matches: h('div', { class: 'stack' }),
+      rooms: h('div', { class: 'stack' }),
       invites: h('div', { class: 'stack' }),
     };
     // Hero: a flashy banner with the title, quick actions and a fan of Superhorses.
@@ -355,6 +452,10 @@ window.App = (() => {
         h('h2', null, 'Challenges'),
         lobbyEls.incoming),
       h('section', { class: 'panel' },
+        h('h2', null, '1v1v1 · 1v1v1v1'),
+        h('p', { class: 'muted' }, 'Open a room for 3 or 4 players. It starts by itself when every seat is filled.'),
+        lobbyEls.rooms),
+      h('section', { class: 'panel' },
         h('h2', null, 'Your matches'),
         lobbyEls.matches),
       app.me.guest ? null : h('section', { class: 'panel' },
@@ -368,6 +469,7 @@ window.App = (() => {
     app.cleanup.push(app.backend.watchPresence(set => { online = set; drawLobbyLists(); drawStats(); }));
     drawLobbyLists();
     drawStats();
+    drawRooms();
   }
 
   // ---------- guest codes ----------
@@ -450,9 +552,10 @@ window.App = (() => {
 
     const matches = await app.backend.listMatches();
     lobbyEls.matches.replaceChildren(...(matches.length ? matches.map(m => {
-      const other = m.p1 === app.me.id ? m.p2 : m.p1;
+      const players = m.players && m.players.length > 2 ? m.players : [m.p1, m.p2];
+      const rivals = players.filter(p => p !== app.me.id);
       return h('div', { class: 'match-row' },
-        h('span', null, 'vs ', h('strong', null, who(other))),
+        h('span', null, players.length > 2 ? h('span', { class: 'pill' }, players.length === 4 ? '1v1v1v1' : '1v1v1') : null, ' vs ', h('strong', null, rivals.map(who).join(', '))),
         h('span', { class: 'pill ' + (m.status === 'active' ? 'live' : '') }, m.status === 'active' ? 'In progress' : 'Finished'),
         h('button', { class: 'btn sm', on: { click: () => go('match', m.id) } }, 'Open'));
     }) : [h('p', { class: 'muted' }, 'No matches yet.')]));

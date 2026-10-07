@@ -9,7 +9,8 @@ window.Table = (() => {
     el.replaceChildren(h('p', { class: 'muted pad' }, 'Loading the table…'));
     let m;
     try { m = await App.backend.getMatch(matchId); } catch (e) { el.replaceChildren(h('p', { class: 'form-error pad' }, e.message)); return; }
-    const isPlayer = [m.p1, m.p2].includes(App.me.id);
+    const seats = m.players && m.players.length > 2 ? m.players : [m.p1, m.p2];
+    const isPlayer = seats.includes(App.me.id);
     // Matches started before tokens existed still get them.
     for (const t of Cards.TOKENS) if (!m.defs[t.id]) m.defs[t.id] = t;
     if (!m.state.ramp) m.state.ramp = 1;
@@ -77,11 +78,21 @@ window.Table = (() => {
       // The clash: both Superhorses face off, then the dice drop in as the bolts fade.
       const lead = pid => { const c = (s0.zones[pid + ':leader'] || []).map(i => s0.cards[i])[0]; return c ? def(c) : null; };
       const my = me(), op = Game.opp(s0, my);
-      Anim.clash({ name: Game.nameOf(s0, my), def: lead(my) }, { name: Game.nameOf(s0, op), def: lead(op) }, () => diceFx(s0, { drop: true }));
+      if (s0.order.length > 2) {
+        // 3–4 players: everyone's bolt strikes from their corner into the middle.
+        Anim.clashAll([my, ...rivalsOf(s0, my)].map(pid => ({ name: Game.nameOf(s0, pid), def: lead(pid) })), () => diceFx(s0, { drop: true }));
+      } else {
+        Anim.clash({ name: Game.nameOf(s0, my), def: lead(my) }, { name: Game.nameOf(s0, op), def: lead(op) }, () => diceFx(s0, { drop: true }));
+      }
     }
   }
 
   const me = () => ui.viewAs;
+  // Everyone else, in turn order starting after you.
+  const rivalsOf = (s, pid) => { const i = s.order.indexOf(pid); return s.order.slice(i + 1).concat(s.order.slice(0, Math.max(0, i))).filter(p => p !== pid); };
+  // A color per seat, so 3–4 player tables can tell cards apart.
+  const SEAT_COLORS = ['#f0b84a', '#7fd8ff', '#ff7ac6', '#9be36b'];
+  const seatColor = pid => SEAT_COLORS[Math.max(0, S().order.indexOf(pid)) % SEAT_COLORS.length];
   const S = () => ui.row.state;
   const def = c => ui.defs[c.def] || { name: 'Unknown card', card_type: 'uma', types: ['speed'] };
 
@@ -134,7 +145,7 @@ window.Table = (() => {
     const s = S();
     if (s.winner) return;
     if (s.phase === 'mulligan') { U.toast('Keep your hand or mulligan first (buttons at the top).'); return; }
-    if (s.phase === 'ramp' && s.step < 3) {
+    if (s.phase === 'ramp' && s.step < Game.CHECK(s)) {
       const t = Game.rampText(s);
       if (t.who === me()) act('nextStep');
       else U.toast(`It's ${Game.nameOf(s, t.who)}'s step. Use the Pass button to pass for them.`);
@@ -157,8 +168,14 @@ window.Table = (() => {
     svg.setAttribute('class', 'arrows');
     svg.setAttribute('id', 'arrows');
     svg.setAttribute('aria-hidden', 'true');
-    const board = h('div', { class: 'board' + (s.phase === 'race' ? ' racing' : ''), id: 'board' },
-      sideEl(op, true),
+    // 1v1: the opponent's side across the table. 3–4 players: a compact
+    // panel per opponent, in turn order after you.
+    const rivals = rivalsOf(s, my);
+    const top = rivals.length > 1
+      ? h('div', { class: 'opp-row n' + rivals.length }, rivals.map(pid => sideEl(pid, true, true)))
+      : sideEl(op, true);
+    const board = h('div', { class: 'board' + (s.phase === 'race' ? ' racing' : '') + (rivals.length > 1 ? ' multi' : ''), id: 'board' },
+      top,
       lanesEl(),
       sideEl(my, false));
     const prevStars = new Map();
@@ -249,7 +266,8 @@ window.Table = (() => {
     const done = s.mulligan[my];
     const hand = (s.zones[my + ':hand'] || []).map(iid => s.cards[iid]);
     const n = hand.length;
-    const theirs = s.mulligan[op];
+    const rest = rivalsOf(s, my);
+    const theirs = rest.every(pid => s.mulligan[pid]);
     // Your starting hand, dealt out big in the middle of the table.
     ui.mullSeen = ui.mullSeen || new Set();
     let k = 0;
@@ -265,12 +283,12 @@ window.Table = (() => {
       h('p', { class: 'eyebrow' }, done === 'redraw' ? 'Your new hand' : 'Starting hand'),
       cards,
       done
-        ? h('p', null, done === 'keep' ? 'You kept your hand.' : 'You drew a new hand.', ' ', theirs ? 'Starting…' : `Waiting for ${Game.nameOf(s, op)}…`)
+        ? h('p', null, done === 'keep' ? 'You kept your hand.' : 'You drew a new hand.', ' ', theirs ? 'Starting…' : `Waiting for ${rest.filter(p => !s.mulligan[p]).map(p => Game.nameOf(s, p)).join(', ')}…`)
         : [h('p', null, `Look at your ${n} cards below. Keep them, or shuffle all of them back and draw ${n} new ones. You can only do this once.`),
           h('div', { class: 'row center' },
             h('button', { class: 'btn primary', on: { click: () => act('mulligan', 'keep') } }, 'Keep hand'),
             h('button', { class: 'btn', on: { click: () => act('mulligan', 'redraw') } }, `Mulligan (draw ${n} new)`))],
-      h('p', { class: 'hint' }, `${Game.nameOf(s, op)}: ${theirs ? 'decided' : 'deciding…'}`));
+      h('p', { class: 'hint' }, rest.map(p => `${Game.nameOf(s, p)}: ${s.mulligan[p] ? 'decided' : 'deciding…'}`).join(' · ')));
   }
 
   function winnerEl() {
@@ -292,7 +310,7 @@ window.Table = (() => {
     return (s.zones[key] || []).map(iid => s.cards[iid]);
   }
 
-  function sideEl(pid, isOpp) {
+  function sideEl(pid, isOpp, compact = false) {
     const s = S();
     const p = s.players[pid];
     const key = z => `${pid}:${z}`;
@@ -355,6 +373,17 @@ window.Table = (() => {
 
     // The other player's hand only takes a row when it's revealed; otherwise
     // its size is shown in the turn bar, to keep the board on one screen.
+    if (compact) {
+      // 3–4 players: a smaller panel per opponent.
+      const st = S().phase === 'ramp' && S().step < Game.CHECK(S()) ? Game.stepInfo(S()) : null;
+      return h('div', { class: 'side opp compact' + (st && st.who === pid ? ' acting' : '') + (p.out ? ' out' : ''), style: { '--pc': seatColor(pid) } },
+        h('div', { class: 'compact-head' },
+          h('span', { class: 'seat-dot' }), h('strong', null, p.name), p.out ? h('span', { class: 'pill' }, 'Out') : null,
+          h('span', { class: 'muted' }, `${hand.length} in hand · ${deckN} deck`),
+          st && st.who === pid ? h('span', { class: 'pill live' }, st.kind === 'tricks' ? 'Tricks' : 'Units') : null),
+        p.revealHand ? handEl : null,
+        h('div', { class: 'side-row' }, fans, leader, base, pool, piles));
+    }
     return h('div', { class: 'side ' + (isOpp ? 'opp' : 'me') },
       isOpp && p.revealHand ? handEl : null,
       h('div', { class: 'side-row' }, fans, leader, base, pool, piles),
@@ -393,8 +422,12 @@ window.Table = (() => {
     return h('div', { class: 'lanes' + (s.miniFight ? ' fighting' : '') },
       lanes.map(l => {
         const all = zoneCards('lane:' + l).filter(c => !c.attachedTo || !s.cards[c.attachedTo] || s.cards[c.attachedTo].zone !== 'lane:' + l);
-        const opMight = all.filter(c => c.owner === op).reduce((a, c) => a + mightOf(c), 0);
-        const myMight = all.filter(c => c.owner === my).reduce((a, c) => a + mightOf(c), 0);
+        const mightBy = pid => all.filter(c => c.owner === pid).reduce((a, c) => a + mightOf(c), 0);
+        const rivals = rivalsOf(s, my);
+        const multi = rivals.length > 1;
+        const mightText = multi
+          ? [...rivals, my].map(pid => `${pid === my ? 'You' : Game.nameOf(s, pid)} ${mightBy(pid)}`).join(' · ')
+          : `${mightBy(op)} vs ${mightBy(my)}`;
         // environment slot(s): one per mini lane; the Race lane shows both
         const slots = l === 'race' ? Game.ENV_SLOTS : ['env:' + l];
         const tint = {};
@@ -414,9 +447,15 @@ window.Table = (() => {
         const sd = s.showdown && s.showdown.active && ((s.showdown.lanes || [s.showdown.lane]).includes(l) || l === 'race');
         const el = h('div', { class: 'lane lane-' + l + (Object.keys(tint).length ? ' has-env' : '') + (sd ? ' showdown' : ''), dataset: { drop: l }, style: tint },
           h('div', { class: 'lane-head' }, h('span', { class: 'lane-name' }, Game.LANE_LABEL[l]),
-            h('span', { class: 'lane-might', title: 'Total might (face-up units)' }, `${opMight} vs ${myMight}`)),
+            h('span', { class: 'lane-might', title: 'Total might (face-up units)' }, mightText)),
           envEls,
-          h('div', { class: 'lane-half opp' }, all.filter(c => c.owner === op).map(c => cardEl(c))),
+          multi
+            ? h('div', { class: 'lane-half opp grouped' }, rivals.map(pid => {
+                const mine = all.filter(c => c.owner === pid);
+                return mine.length ? h('div', { class: 'lane-group', style: { '--pc': seatColor(pid) } },
+                  h('span', { class: 'lane-group-name' }, Game.nameOf(s, pid)), mine.map(c => cardEl(c))) : null;
+              }))
+            : h('div', { class: 'lane-half opp' }, all.filter(c => c.owner === op).map(c => cardEl(c))),
           h('div', { class: 'lane-rail', 'aria-hidden': 'true' }),
           h('div', { class: 'lane-half me' }, all.filter(c => c.owner === my).map(c => cardEl(c))));
         bindDrop(el, null);
@@ -818,7 +857,7 @@ window.Table = (() => {
         else it('Discard (to trash, without casting)', () => act('move', c.iid, 'trash'));
         it('Top of deck', () => act('move', c.iid, 'deck-top'));
         it('Bottom of deck', () => act('move', c.iid, 'deck-bottom'));
-        it('Give to opponent', () => act('give', c.iid));
+        for (const pid of rivalsOf(s, c.owner)) it(S().order.length > 2 ? `Give to ${Game.nameOf(s, pid)}` : 'Give to opponent', () => act('give', c.iid, pid));
       } else {
         it('To hand', () => act('move', c.iid, 'hand'));
       }
@@ -866,7 +905,7 @@ window.Table = (() => {
       it('Top of deck', () => act('move', c.iid, 'deck-top'));
       it('Trash', () => act('trash', c.iid), 'danger');
       it('Banish (out of the game)', () => act('banish', c.iid), 'danger');
-      it('Give to opponent', () => act('give', c.iid));
+      for (const pid of rivalsOf(s, c.owner)) it(S().order.length > 2 ? `Give to ${Game.nameOf(s, pid)}` : 'Give to opponent', () => act('give', c.iid, pid));
     }
     return items;
   }
@@ -1164,12 +1203,12 @@ window.Table = (() => {
       const nm = Game.nameOf(s, s.priority);
       return { kind: 'theirs', big: `${nm}'s call`, chip: `Chain · ${nm}'s call`, sub: `${sub}. Waiting for ${nm} to respond or resolve.` };
     }
-    if (s.phase === 'race') return { kind: 'both', big: 'Race!', chip: 'Race · both players', sub: t.hint };
-    if (s.step >= 3) {
+    if (s.phase === 'race') return { kind: 'both', big: 'Race!', chip: `Race · ${s.order.length > 2 ? 'everyone' : 'both players'}`, sub: t.hint };
+    if (s.step >= Game.CHECK(s)) {
       const f = s.fight || {};
       if (f.result === 'fight') return { kind: 'both', big: 'Fight!', chip: 'Mini-lane fight', sub: 'Both chose to fight. Fight it out in the mini lanes, then press Continue.' };
       if (f.result) return { kind: 'both', big: 'No fight', chip: 'Fight check · done', sub: 'Someone refused. Press Continue to move on.' };
-      return { kind: 'both', big: 'Fight?', chip: 'Fight check · both players', sub: t.hint };
+      return { kind: 'both', big: 'Fight?', chip: `Fight check · ${s.order.length > 2 ? 'everyone' : 'both players'}`, sub: t.hint };
     }
     if (t.who === my) return { kind: 'mine', big: 'Your turn', chip: `Your turn · ${t.short}`, sub: t.hint };
     const nm = Game.nameOf(s, t.who);
@@ -1200,13 +1239,14 @@ window.Table = (() => {
       if (last && last.name === sg.group) last.n++;
       else groups.push({ name: sg.group, n: 1 });
     });
-    const track = h('div', { class: 'track', style: { '--n': segs.length, '--pos': startPos }, 'aria-hidden': 'true' },
+    const multiTrack = s.order.length > 2;
+    const track = h('div', { class: 'track' + (multiTrack ? ' multi' : ''), style: { '--n': segs.length, '--pos': startPos }, 'aria-hidden': 'true' },
       (() => { let col = 1; return groups.map(g => { const el = h('span', { class: 'track-group', style: { gridColumn: `${col} / span ${g.n}` } }, g.name); col += g.n; return el; }); })(),
       segs.map((sg, i) => h('span', {
-        style: { gridColumn: String(i + 1) },
-        class: ['track-seg', sg.who ? (sg.who === my ? 'who-mine' : 'who-theirs') : 'who-both', i < index ? 'done' : '', i === index ? 'now' : ''].filter(Boolean).join(' '),
+        style: { gridColumn: String(i + 1), ...(multiTrack && sg.who ? { '--pc': seatColor(sg.who) } : {}) },
+        class: ['track-seg', sg.who ? (sg.who === my ? 'who-mine' : 'who-theirs') : 'who-both', sg.kind ? 'k-' + sg.kind : '', i < index ? 'done' : '', i === index ? 'now' : ''].filter(Boolean).join(' '),
         title: `${sg.group} · ${sg.label}${sg.who ? ' · ' + Game.nameOf(s, sg.who) : ''}`,
-      }, sg.label)),
+      }, multiTrack && sg.who ? `${sg.kind === 'tricks' ? '✦' : '▲'} ${sg.who === my ? 'You' : Game.nameOf(s, sg.who)}` : sg.label)),
       // Turn brackets under the track: one per Ramp, owned by its first player.
       (turns || []).map(t => h('span', {
         class: ['track-turn', t.who === my ? 'mine' : 'theirs', index >= t.start && index <= t.end && s.phase !== 'mulligan' ? 'now' : '', index > t.end ? 'done' : ''].filter(Boolean).join(' '),
@@ -1235,9 +1275,9 @@ window.Table = (() => {
     }
     if (s.phase === 'mulligan') {
       const done = s.mulligan[my];
-      if (done) actions.push(h('span', { class: 'fight-note calm' }, done === 'keep' ? 'Kept · ' : 'Mulliganed · ', `waiting for ${Game.nameOf(s, op)}`));
+      if (done) actions.push(h('span', { class: 'fight-note calm' }, done === 'keep' ? 'Kept · ' : 'Mulliganed · ', `waiting for ${rivalsOf(s, my).filter(p => !s.mulligan[p]).map(p => Game.nameOf(s, p)).join(', ') || 'everyone'}`));
       else actions.push(h('span', { class: 'fight-note calm' }, 'See the middle of the table'));
-    } else if (s.phase === 'ramp' && s.step < 3) {
+    } else if (s.phase === 'ramp' && s.step < Game.CHECK(s)) {
       const t = Game.rampText(s);
       actions.push(h('button', { class: 'btn ' + (t.who === my && !chainOpen ? 'primary' : 'ghost'), on: { click: () => act('nextStep') }, title: t.who === my ? 'Space' : null },
         t.who === my ? h('span', null, 'Pass ', h('kbd', null, 'Space')) : `Pass for ${Game.nameOf(s, t.who)}`));
@@ -1247,16 +1287,21 @@ window.Table = (() => {
       const next = last ? 'Begin Race →' : `Ramp ${s.ramp + 1} →`;
       if (!f.result) {
         const mine = f.choices[my];
-        const theirs = !!f.choices[op];
+        const rivals = rivalsOf(s, my);
+        const multi = rivals.length > 1;
+        const chosen = rivals.filter(p => f.choices[p]).length;
+        const status = multi ? `${chosen}/${rivals.length} others have chosen` : `${Game.nameOf(s, op)} ${chosen ? 'has chosen' : 'is choosing…'}`;
         if (!mine) {
           actions.push(h('button', { class: 'btn fight', on: { click: () => act('fightChoice', 'fight') } }, 'Fight'));
-          actions.push(h('button', { class: 'btn', title: `You lose ${G().REFUSE_FIGHT_FANS ?? 50} fans`, on: { click: () => act('fightChoice', 'refuse') } }, `Refuse (−${G().REFUSE_FIGHT_FANS ?? 50} fans)`));
+          actions.push(multi
+            ? h('button', { class: 'btn', title: 'If only one player chooses Fight, they get fans instead', on: { click: () => act('fightChoice', 'refuse') } }, 'Refuse')
+            : h('button', { class: 'btn', title: `You lose ${G().REFUSE_FIGHT_FANS ?? 50} fans`, on: { click: () => act('fightChoice', 'refuse') } }, `Refuse (−${G().REFUSE_FIGHT_FANS ?? 50} fans)`));
+          actions.push(h('span', { class: 'fight-note calm' }, status));
         } else {
-          actions.push(h('span', { class: 'fight-note calm' }, `You chose ${mine === 'fight' ? 'Fight' : 'Refuse'} · ${Game.nameOf(s, op)} ${theirs ? 'has chosen' : 'is choosing…'}`));
+          actions.push(h('span', { class: 'fight-note calm' }, `You chose ${mine === 'fight' ? 'Fight' : 'Refuse'} · ${status}`));
         }
-        if (!mine) actions.push(h('span', { class: 'fight-note calm' }, `${Game.nameOf(s, op)} ${theirs ? 'has chosen' : 'is choosing…'}`));
       } else {
-        if (f.result === 'fight') actions.push(h('span', { class: 'fight-note' }, 'Mini-lane fight!'));
+        if (f.result === 'fight') actions.push(h('span', { class: 'fight-note' }, f.fighters ? `Fight: ${f.fighters.map(p => p === my ? 'You' : Game.nameOf(s, p)).join(' vs ')}` : 'Mini-lane fight!'));
         actions.push(h('button', { class: 'btn primary', on: { click: () => act('continueOn') } }, next));
       }
     } else {
@@ -1264,7 +1309,12 @@ window.Table = (() => {
     }
 
     return h('div', { class: 'hud turn-' + info.kind, role: 'status', 'aria-live': 'polite' },
-      player(op, 'opp'),
+      rivalsOf(s, my).length > 1
+        ? h('div', { class: 'hud-opps' }, rivalsOf(s, my).map(pid => h('div', { class: 'hud-opp', style: { '--pc': seatColor(pid) } },
+            h('span', { class: 'seat-dot' }), h('span', { class: 'hud-name' }, s.players[pid].name),
+            h('strong', null, s.players[pid].fans),
+            h('span', { class: 'hud-meter' }, h('span', { style: { width: Math.max(0, Math.min(100, (s.players[pid].fans / G().FANS_TO_WIN) * 100)) + '%' } })))))
+        : player(op, 'opp'),
       h('div', { class: 'hud-center' },
         h('div', { class: 'hud-top' },
           h('span', { class: 'hud-round' }, `Round ${s.round}`),
@@ -1292,7 +1342,7 @@ window.Table = (() => {
     };
     const m = U.modal('Roll dice', h('div', { class: 'stack' },
       h('div', { class: 'row wrap' }, h('label', { for: 'rd-n' }, 'How many'), count, sideRow),
-      h('p', { class: 'hint' }, 'Both players see the roll, and it goes in the log.'),
+      h('p', { class: 'hint' }, 'Everyone at the table sees the roll, and it goes in the log.'),
       h('div', { class: 'row end' }, h('button', { class: 'btn primary', on: { click: roll } }, '🎲 Roll'))));
     count.focus();
   }
@@ -1369,7 +1419,6 @@ window.Table = (() => {
   function diceFx(s, opts = {}) {
     const PIPS = { 1: [5], 2: [1, 9], 3: [1, 5, 9], 4: [1, 3, 7, 9], 5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9] };
     const face = n => h('div', { class: 'die-face' }, Array.from({ length: 9 }, (_, i) => h('i', { class: PIPS[n].includes(i + 1) ? 'on' : '' })));
-    const [p0, p1] = s.order;
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const dieBox = pid => {
       const box = h('div', { class: 'die-slot' + (pid === me() ? ' mine' : '') },
@@ -1377,10 +1426,12 @@ window.Table = (() => {
         h('span', { class: 'die-name' }, pid === me() ? 'You' : Game.nameOf(s, pid)));
       return box;
     };
-    const a = dieBox(p0), b = dieBox(p1);
+    const boxes = s.order.map(dieBox);
     const note = h('p', { class: 'dice-note' }, 'Rolling for who goes first…');
+    const row = [];
+    boxes.forEach((b, i) => { if (i) row.push(h('span', { class: 'dice-vs' }, 'vs')); row.push(b); });
     const el = h('div', { class: 'dice-fx' + (opts.drop ? ' drop' : ''), role: 'status', on: { click: () => el.remove() } },
-      h('div', { class: 'dice-card' }, h('p', { class: 'eyebrow' }, 'Who goes first?'), h('div', { class: 'dice-row' }, a, h('span', { class: 'dice-vs' }, 'vs'), b), note));
+      h('div', { class: 'dice-card' }, h('p', { class: 'eyebrow' }, 'Who goes first?'), h('div', { class: 'dice-row wrap' }, row), note));
     document.body.append(el);
     const setDie = (box, n, rolling) => {
       const d = box.querySelector('.die');
@@ -1390,16 +1441,17 @@ window.Table = (() => {
     const rolls = s.dice.rolls;
     let t = 0;
     const step = reduce ? 0 : 900;
-    rolls.forEach(([x, y], i) => {
+    rolls.forEach((vals, i) => {
       // tumble: flicker random faces, then land
       if (!reduce) for (let k = 0; k < 8; k++) setTimeout(() => {
-        setDie(a, 1 + Math.floor(Math.random() * 6), true); setDie(b, 1 + Math.floor(Math.random() * 6), true);
+        boxes.forEach(b => setDie(b, 1 + Math.floor(Math.random() * 6), true));
       }, t + k * 90);
       setTimeout(() => {
-        setDie(a, x, false); setDie(b, y, false);
-        a.classList.toggle('win', x > y); b.classList.toggle('win', y > x);
-        note.textContent = x === y ? `Tie (${x})! Rolling again…` : `${Game.nameOf(s, x > y ? p0 : p1)} goes first!`;
-        note.classList.toggle('done', x !== y);
+        const top = Math.max(...vals);
+        const tied = vals.filter(v => v === top).length > 1;
+        boxes.forEach((b, j) => { setDie(b, vals[j], false); b.classList.toggle('win', !tied && vals[j] === top); });
+        note.textContent = tied ? `Tie for the highest (${top})! Rolling again…` : `${Game.nameOf(s, s.order[vals.indexOf(top)])} goes first!`;
+        note.classList.toggle('done', !tied);
       }, t + step);
       t += step + (i < rolls.length - 1 ? 700 : 0);
     });

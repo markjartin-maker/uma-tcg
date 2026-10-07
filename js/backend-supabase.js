@@ -255,6 +255,43 @@ window.SupabaseBackend = class SupabaseBackend {
     return () => this.sb.removeChannel(ch);
   }
 
+  // ----- rooms (1v1v1 / 1v1v1v1) -----
+  roomError(e) {
+    if (/rooms|join_room|leave_room|schema cache/i.test(e.message || '')) return new Error('Your database needs the latest update for 1v1v1 / 1v1v1v1: in Supabase, open SQL Editor and run supabase/13-multiplayer.sql.');
+    return new Error(e.message);
+  }
+  async listRooms() {
+    const { data, error } = await this.sb.from('rooms').select('*').in('status', ['open', 'started'])
+      .order('created_at', { ascending: false }).limit(30);
+    if (error) { if (/rooms/.test(error.message || '')) return []; throw new Error(error.message); }
+    return data;
+  }
+  async createRoom(size, deckId) {
+    const { data, error } = await this.sb.from('rooms').insert({ size, members: [{ user: this.me.id, deck: deckId }] }).select().single();
+    if (error) throw this.roomError(error);
+    return data;
+  }
+  async joinRoom(id, deckId) {
+    const { data, error } = await this.sb.rpc('join_room', { room: id, deck: deckId });
+    if (error) throw this.roomError(error);
+    return data;
+  }
+  async leaveRoom(id) {
+    const { error } = await this.sb.rpc('leave_room', { room: id });
+    if (error) throw this.roomError(error);
+  }
+  async markRoomStarted(id, matchId) {
+    this.check(await this.sb.from('rooms').update({ status: 'started', match_id: matchId }).eq('id', id).eq('status', 'open'));
+  }
+  watchRooms(cb) {
+    const refresh = async () => { try { cb(await this.listRooms()); } catch (e) { console.error(e); } };
+    refresh();
+    const ch = this.sb.channel('rooms-' + this.me.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, refresh)
+      .subscribe();
+    return () => this.sb.removeChannel(ch);
+  }
+
   // ----- challenges -----
   async listChallenges() {
     return this.check(await this.sb.from('challenges').select('*').in('status', ['pending', 'accepted'])
@@ -280,12 +317,18 @@ window.SupabaseBackend = class SupabaseBackend {
 
   // ----- matches -----
   async listMatches() {
-    return this.check(await this.sb.from('matches').select('id,p1,p2,status,updated_at')
-      .order('updated_at', { ascending: false }).limit(20));
+    const q = cols => this.sb.from('matches').select(cols).order('updated_at', { ascending: false }).limit(20);
+    let r = await q('id,p1,p2,players,status,updated_at');
+    if (r.error && /players/.test(r.error.message || '')) r = await q('id,p1,p2,status,updated_at'); // before 13-multiplayer.sql
+    return this.check(r);
   }
 
-  async createMatch({ p1, p2, state, defs }) {
-    const m = this.check(await this.sb.from('matches').insert({ p1, p2, state }).select('id').single());
+  async createMatch({ p1, p2, players, state, defs }) {
+    const row = { p1, p2, state };
+    if (players && players.length > 2) row.players = players;
+    let r = await this.sb.from('matches').insert(row).select('id').single();
+    if (r.error && /players/.test(r.error.message || '')) throw new Error('Your database needs the latest update for 1v1v1 / 1v1v1v1: in Supabase, open SQL Editor and run supabase/13-multiplayer.sql, then try again.');
+    const m = this.check(r);
     this.check(await this.sb.from('match_defs').insert({ match_id: m.id, defs }));
     return m.id;
   }

@@ -1440,3 +1440,69 @@ button.pile:hover { border-color: var(--line); }
   .lobby > .panel, .friend-list li, .dot.on, .challenge.in, .brand-mark, .hero-eyebrow, .hero-tag, .hero-cta, .hero-stats { animation: none !important; }
   .hero-spark { opacity: .5; }
 }
+
+/* lobby rooms */
+.room-row { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid transparent; }
+.room-row.mine { border-color: var(--accent); }
+.room-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.room-head .pill { margin-left: auto; }
+.seats { display: flex; flex-wrap: wrap; gap: 6px; }
+.seat { padding: 3px 10px; border-radius: 999px; font-size: .82rem; border: 1px dashed var(--line); color: var(--muted); }
+.seat.taken { border-style: solid; color: var(--fg); background: rgba(255,255,255,.04); }
+.seat.me { border-color: var(--accent); color: var(--accent); }
+.lobby > .panel:nth-child(5) { animation-delay: .75s; }
+
+/* =====================================================================
+   3–4 player tables
+   ===================================================================== */
+.opp-row { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.opp-row.n3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.side.compact {
+  --ch: calc(var(--ch-base) * .62); --cw: calc(var(--ch) * .717);
+  border-radius: 12px; padding: 6px; background: rgba(0,0,0,.12); border: 1px solid color-mix(in srgb, var(--pc) 35%, transparent);
+  gap: 4px; min-width: 0;
+}
+.side.compact.acting { border-color: var(--pc); box-shadow: 0 0 0 1px var(--pc), 0 0 18px color-mix(in srgb, var(--pc) 35%, transparent); }
+.side.compact.out { opacity: .45; filter: grayscale(.6); }
+.compact-head { display: flex; align-items: center; gap: 6px; font-size: .78rem; min-width: 0; flex-wrap: wrap; }
+.compact-head strong { color: var(--pc); }
+.seat-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--pc); flex: none; box-shadow: 0 0 6px var(--pc); }
+.side.compact .side-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+.side.compact .fans { flex: 0 0 auto; padding: 4px 6px; }
+.side.compact .fans-name { display: none; }
+.side.compact .fans-num .n { font-size: 1.15rem; }
+.side.compact .fans-btns .chip-btn { font-size: .66rem; padding: 0 5px; }
+.side.compact .zone { padding: 16px 5px 5px; }
+.side.compact .zone-base { flex: 1 1 120px; }
+.side.compact .zone-pool { flex: 1 1 100px; --sw: calc(var(--ch) * .6); --sh: calc(var(--ch) * .76); }
+.side.compact .zone-leader, .side.compact .zone-champion { width: calc(var(--ch) + 12px); }
+.side.compact .piles { gap: 2px; }
+.side.compact .pile .card.sz-s { font-size: calc(var(--ch) * .6 / 14.75); }
+.side.compact .pile-empty { width: calc(var(--ch) * .44); height: calc(var(--ch) * .6); }
+.side.compact .pile-label { font-size: .6rem; }
+.side.compact .zone-label { font-size: .58rem; top: 3px; }
+.side.compact .hand .slot { --ch: 44px; --cw: 32px; }
+.board.multi .lanes { margin-top: 2px; }
+/* lanes: opponents' cards grouped by player, with their seat color */
+.lane-half.grouped { gap: 8px; align-items: flex-end; }
+.lane-group { display: flex; flex-wrap: wrap; gap: 4px; align-items: flex-end; padding: 12px 4px 2px; border-radius: 8px; position: relative;
+  border: 1px solid color-mix(in srgb, var(--pc) 45%, transparent); background: color-mix(in srgb, var(--pc) 7%, transparent); }
+.lane-group-name { position: absolute; top: 0; left: 6px; font-size: .58rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--pc); }
+/* turn bar: many short steps, named by player */
+.track.multi .track-seg { font-size: .58rem; padding: 3px 1px; }
+.track.multi .track-seg.who-theirs { border-bottom-color: color-mix(in srgb, var(--pc, var(--t-power)) 70%, transparent); }
+.track.multi .track-seg.k-tricks { background: rgba(184,146,255,.08); }
+.hud-opps { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.hud-opp { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; font-size: .78rem; }
+.hud-opp strong { color: var(--pc); font-family: var(--f-display); }
+.hud-opp .hud-meter { grid-column: 1 / -1; height: 3px; }
+.hud-opp .hud-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* clash intro with 3–4 players: leaders in the corners */
+.anim-layer.clash.multi .clash-side .card.sz-l { font-size: clamp(11px, 2.2vh, 19px); }
+.clash-side.tl { left: 5vw; top: 6vh; animation: clash-them .6s .1s cubic-bezier(.2,.9,.25,1.1) both; }
+.clash-side.br { right: 5vw; bottom: 6vh; animation: clash-me .6s .1s cubic-bezier(.2,.9,.25,1.1) both; }
+.anim-layer.clash.multi .clash-vs { font-size: clamp(2rem, 5.5vw, 4rem); }
+.track.multi .track-seg[style*="--pc"] { background: color-mix(in srgb, var(--pc) 16%, transparent); color: color-mix(in srgb, var(--pc) 75%, var(--fg)); }
+.track.multi .track-seg.k-tricks[style*="--pc"] { background: color-mix(in srgb, var(--pc) 8%, rgba(184,146,255,.1)); }
+.track.multi .track-seg.now { color: var(--fg); box-shadow: inset 0 0 0 1px var(--pc, var(--fg)); }
