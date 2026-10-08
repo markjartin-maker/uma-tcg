@@ -137,14 +137,15 @@ window.Anim = (() => {
           g.globalAlpha = Math.max(0, a * (p.alpha ?? 1));
           g.translate(p.x, p.y); g.rotate(p.rot);
           g.fillStyle = p.color; g.strokeStyle = p.color;
-          if (p.shape === 'dot') { g.shadowBlur = 10; g.shadowColor = p.color; g.beginPath(); g.arc(0, 0, p.size * (0.4 + 0.6 * a), 0, 7); g.fill(); }
+          if (p.shape === 'dot') { if (!p.flat) { g.shadowBlur = 10; g.shadowColor = p.color; } g.beginPath(); g.arc(0, 0, p.size * (0.4 + 0.6 * a), 0, 7); g.fill(); }
           else if (p.shape === 'petal') { g.beginPath(); g.ellipse(0, 0, p.size, p.size * 0.45, 0, 0, 7); g.fill(); }
           else if (p.shape === 'star') {
             const tw = 0.6 + 0.4 * Math.sin(now / 90 + p.seed);
-            g.shadowBlur = 12; g.shadowColor = p.color; g.beginPath();
+            if (!p.flat) { g.shadowBlur = 12; g.shadowColor = p.color; }
+            g.beginPath();
             for (let k = 0; k < 8; k++) { const r = k % 2 ? p.size * 0.35 * tw : p.size * tw; g.lineTo(Math.cos(k * Math.PI / 4) * r, Math.sin(k * Math.PI / 4) * r); }
             g.closePath(); g.fill();
-          } else if (p.shape === 'line') { g.lineWidth = p.size; g.lineCap = 'round'; g.shadowBlur = 8; g.shadowColor = p.color; g.beginPath(); g.moveTo(0, 0); g.lineTo(-p.len, 0); g.stroke(); }
+          } else if (p.shape === 'line') { g.lineWidth = p.size; g.lineCap = 'round'; if (!p.flat) { g.shadowBlur = 8; g.shadowColor = p.color; } g.beginPath(); g.moveTo(0, 0); g.lineTo(-p.len, 0); g.stroke(); }
           else if (p.shape === 'flame') {
             const r = p.size * (0.3 + 0.7 * a);
             const grd = g.createRadialGradient(0, 0, 0, 0, 0, r);
@@ -178,6 +179,9 @@ window.Anim = (() => {
     const colors = anim.kind !== 'code' && cfg.colorMode === 'custom' ? [cfg.c1, cfg.c2] : colorsOf(ctx.def);
     const dur = clamp(Number(anim.duration) || 2.5, 0.5, 6) * 1000;
     current = anim.kind === 'code' ? playCode(anim, ctx, colors, dur) : playPreset(cfg, ctx, colors, dur);
+    // The animation's own sound (set in the Animation maker).
+    const snd = (anim.config || {}).sound;
+    if (snd && snd.url && window.Sound) Sound.playUrl(snd.url, snd.volume ?? 1, 'anim');
     return true;
   }
 
@@ -514,5 +518,137 @@ window.Anim = (() => {
     }
   }
 
-  return { PRESETS, PRESET_DEFAULT, CODE_TEMPLATE, setLibrary, list, get, play, stop, prefs, setPrefs, colorsOf, clash, clashAll };
+
+  // ---------- victory ----------
+  // The winner's Superhorse starts tiny in the middle, spirals and spins
+  // as it grows, then explodes to full size with speed lines (its first
+  // type's color above, its second type's color below).
+  // opts: { def, name, mine, onDone }
+  function victory(opts = {}) {
+    const { def, name, mine, onDone, sleeve } = opts;
+    const col = colorsOf(def);
+    const layer = layerEl('victory');
+    layer.style.pointerEvents = 'auto';
+    layer.style.setProperty('--c1', col[0]);
+    layer.style.setProperty('--c2', col[1]);
+    const { g, W, H } = makeCanvas(layer);
+    layer.append(h('div', { class: 'vic-wash' }));
+    // The card is a thin 3D slab: front, back (the winner's sleeve) and four
+    // edges, so you see its side go past as it flips.
+    const flip = h('div', { class: 'vic-flip' },
+      h('div', { class: 'vic-face front' }, def ? Cards.render(def, { size: 'l' }) : Cards.renderBack('l', '', sleeve)),
+      h('div', { class: 'vic-face back' }, Cards.renderBack('l', '', sleeve)),
+      h('div', { class: 'vic-edge l' }), h('div', { class: 'vic-edge r' }),
+      h('div', { class: 'vic-edge t' }), h('div', { class: 'vic-edge b' }));
+    const holder = h('div', { class: 'vic-card' }, flip);
+    const title = h('div', { class: 'vic-title' },
+      h('span', { class: 'vic-big' }, mine ? 'Victory!' : 'Victory'),
+      h('span', { class: 'vic-name' }, `${name || 'Someone'} wins`));
+    layer.append(holder, title);
+    const C = { x: W / 2, y: H * 0.46 };
+    const quick = reduced();
+    const T_BOOM = quick ? 0 : 2400, T_FADE = quick ? 2000 : 5600, T_END = quick ? 2500 : 6200;
+    const TURNS = 3;
+    const R0 = Math.min(W, H) * 0.2;
+    const P = particles();
+    const rings = [];
+    const t0 = performance.now();
+    let last = t0, raf = 0, boomed = false, faded = false, done = false;
+    const easeIn = t => t * t * t;
+    const easeOutBack = t => { const c = 1.9; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+    layer.addEventListener('click', () => finish(true));
+    // A speed line flying outward from the card's edge; upper half = color 1, lower = color 2.
+    function streak(fromCenter = false) {
+      const a = rnd(0, Math.PI * 2);
+      const ux = Math.cos(a), uy = Math.sin(a);
+      const start = fromCenter ? rnd(0, 30) : rnd(Math.min(W, H) * 0.18, Math.min(W, H) * 0.3);
+      const v = rnd(900, 1900);
+      P.add({ x: C.x + ux * start, y: C.y + uy * start, vx: ux * v, vy: uy * v, rot: a, shape: 'line',
+        len: rnd(40, 160), size: rnd(1.5, 4.5), max: rnd(0.35, 0.8), color: uy < 0 ? col[0] : col[1], alpha: 0.95, flat: true });
+    }
+    function boom() {
+      boomed = true;
+      layer.classList.add('boom');
+      for (let i = 0; i < 3; i++) rings.push({ t: -i * 0.12, color: i === 1 ? '#ffffff' : col[i ? 1 : 0] });
+      for (let i = 0; i < (quick ? 0 : 100); i++) streak(true);
+      for (let i = 0; i < (quick ? 0 : 60); i++) {
+        const a = rnd(0, Math.PI * 2), v = rnd(200, 900);
+        P.add({ x: C.x, y: C.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, shape: Math.random() < 0.25 ? 'star' : 'dot', seed: rnd(0, 9), flat: true,
+          size: rnd(2, 6), max: rnd(0.8, 1.6), drag: 0.96, g: 120, color: Math.sin(a) < 0 ? col[0] : col[1] });
+      }
+    }
+    function frame(now) {
+      // (opts.seek holds the animation at one moment: for checking frames.)
+      const el = opts.seek != null ? opts.seek : now - t0;
+      const dt = opts.seek != null ? 1 / 60 : Math.min(0.05, (now - last) / 1000);
+      last = now;
+      if (el >= T_END) { finish(false); return; }
+      if (el >= T_FADE && !faded) { faded = true; layer.classList.add('out'); }
+      // The card: a spiral in toward the middle, spinning faster and growing.
+      if (!boomed && !quick) {
+        const p = clamp(el / T_BOOM, 0, 1);
+        const e = easeIn(p);
+        const r = R0 * Math.pow(1 - p, 1.3);
+        const th = -Math.PI / 2 + p * Math.PI * 2 * 1.25;
+        const x = Math.cos(th) * r, y = Math.sin(th) * r;
+        const scale = 0.05 + 0.8 * e;
+        // Flips upright around its vertical axis (front → side → back → side
+        // → front), faster and faster, with a little lean.
+        const rotY = 360 * TURNS * e;
+        const lean = 16 * Math.sin(p * Math.PI);
+        const tiltZ = -10 * Math.sin(p * Math.PI * 1.5);
+        holder.style.transform = `translate(calc(-50% + ${x.toFixed(1)}px), calc(-50% + ${y.toFixed(1)}px)) scale(${scale.toFixed(3)}) rotate(${tiltZ.toFixed(1)}deg)`;
+        flip.style.transform = `rotateX(${lean.toFixed(1)}deg) rotateY(${rotY.toFixed(1)}deg)`;
+        // a glowing trail behind it
+        if (Math.random() < 0.9) P.add({ x: C.x + x, y: C.y + y, vx: rnd(-30, 30), vy: rnd(-30, 30), shape: 'dot', size: 3 + 10 * e, max: 0.5, color: col[Math.random() < 0.5 ? 0 : 1], alpha: 0.8, flat: true });
+      }
+      if (el >= T_BOOM && !boomed) boom();
+      if (boomed && !quick) {
+        const k = clamp((el - T_BOOM) / 450, 0, 1);
+        const scale = 0.85 + 0.15 * easeOutBack(k);
+        holder.style.transform = `translate(-50%, -50%) scale(${scale.toFixed(3)})`;
+        // settles with a small wobble after the burst
+        const wob = (1 - k) * 14 * Math.sin(k * Math.PI * 3);
+        flip.style.transform = `rotateY(${wob.toFixed(1)}deg)`;
+        if (!faded) for (let i = 0; i < 3; i++) streak(false);
+      }
+      g.clearRect(0, 0, W, H);
+      g.globalCompositeOperation = 'lighter';
+      for (let i = rings.length - 1; i >= 0; i--) {
+        const rg = rings[i];
+        rg.t += dt;
+        if (rg.t < 0) continue;
+        const q = rg.t / 0.9;
+        if (q >= 1) { rings.splice(i, 1); continue; }
+        const rad = Math.max(W, H) * 0.75 * (1 - Math.pow(1 - q, 3));
+        g.save(); g.globalAlpha = 1 - q; g.strokeStyle = rg.color; g.lineWidth = 26 * (1 - q) + 2;
+        g.beginPath(); g.arc(C.x, C.y, rad, 0, Math.PI * 2); g.stroke(); g.restore();
+      }
+      P.step(dt, g, now);
+      // a soft halo behind the card while it builds up
+      if (!quick) {
+        const p = clamp(el / T_BOOM, 0, 1);
+        const hr = Math.min(W, H) * (boomed ? 0.42 : 0.05 + 0.3 * easeIn(p));
+        const halo = g.createRadialGradient(C.x, C.y, 0, C.x, C.y, hr);
+        halo.addColorStop(0, `rgba(255,255,255,${boomed ? 0.25 : 0.35 * p})`); halo.addColorStop(0.5, rgba(col[0], 0.18)); halo.addColorStop(1, 'rgba(0,0,0,0)');
+        g.fillStyle = halo; g.fillRect(C.x - hr, C.y - hr, hr * 2, hr * 2);
+      }
+      g.globalCompositeOperation = 'source-over';
+      const flash = boomed && !quick ? Math.max(0, 0.9 * (1 - (el - T_BOOM) / 380)) : 0;
+      if (flash > 0.01) { g.fillStyle = `rgba(255,255,255,${flash})`; g.fillRect(0, 0, W, H); }
+      raf = requestAnimationFrame(frame);
+    }
+    if (quick) { holder.style.transform = 'translate(-50%, -50%)'; boom(); }
+    raf = requestAnimationFrame(frame);
+    function finish(skipped) {
+      if (done) return;
+      done = true;
+      cancelAnimationFrame(raf);
+      if (skipped) { layer.classList.add('out'); setTimeout(() => layer.remove(), 400); } else layer.remove();
+      if (onDone) onDone();
+    }
+    return { stop: () => finish(true) };
+  }
+
+  return { PRESETS, PRESET_DEFAULT, CODE_TEMPLATE, setLibrary, list, get, play, stop, prefs, setPrefs, colorsOf, clash, clashAll, victory };
 })();

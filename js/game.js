@@ -125,6 +125,7 @@ window.Game = (() => {
       rarity: c.rarity || 'common', full_art: !!c.full_art, subtitle: c.subtitle || null,
       tags: c.tags || [], conjure: c.conjure || null, signature_of: c.signature_of || null,
       play_anim: c.play_anim || null,
+      ...(c.code ? { code: c.code } : {}),
       ...(c.is_token ? { token: true } : {}) };
   }
 
@@ -154,6 +155,13 @@ window.Game = (() => {
     return { who: null, kind: 'check' };
   }
   const firstTricksStep = s => (isMulti(s) ? N(s) : 2);
+  // Fans needed to win this match (depends on how many players there are).
+  function winTarget(s) {
+    const t = G().FANS_TO_WIN;
+    if (typeof t === 'number') return t;
+    const n = s && s.order ? s.order.length : 2;
+    return (t && (t[n] || t[Math.min(4, Math.max(2, n))])) || 1000;
+  }
   const nameOf = (s, pid) => (s.players[pid] ? s.players[pid].name : 'Someone');
   const zoneKind = z => (z.startsWith('env:') ? 'env' : z.startsWith('lane:') ? z.slice(5) : z.split(':')[1]);
   const zoneOwner = z => (z.startsWith('lane:') || z.startsWith('env:') ? null : z.split(':')[0]);
@@ -206,6 +214,7 @@ window.Game = (() => {
 
     // Tokens only exist in play: leaving play removes them from the game.
     if (c.token && !toBoard) {
+      if (wasOnBoard) fire(s, 'leaves play', [c], () => ({ here: LANES.includes(from) ? from : null }));
       detachFromZone(s, iid);
       for (const k of attachmentsOf(s, iid)) {
         s.cards[k].attachedTo = null;
@@ -257,6 +266,8 @@ window.Game = (() => {
     }
     place(s, iid, key, pos);
     if (c.paid && !c.faceDown) settlePayment(s, iid);
+    if (LANES.includes(toKind) && from !== toKind && !c.faceDown) fire(s, 'enters lane', [c]);
+    if (wasOnBoard && from !== 'pool' && !toBoard) fire(s, 'leaves play', [c], () => ({ here: LANES.includes(from) ? from : null }));
   }
 
   // ---------- hidden payment for face-down plays ----------
@@ -266,7 +277,8 @@ window.Game = (() => {
   function payCost(s, me, iid, hide) {
     const c = s.cards[iid];
     const def = s.defs[c.def] || {};
-    const energy = Number(def.energy || 0), power = Number(def.power || 0);
+    const mods = activeMods(s, s.defs);
+    const energy = effCost(s, s.defs, c, 'energy', mods), power = effCost(s, s.defs, c, 'power', mods);
     const pool = (s.zones[`${me}:pool`] || []).map(x => s.cards[x]).filter(st => !st.mask);
     const types = def.types || [];
     // Power: recycle Stars of the card's types (already-exhausted ones first).
@@ -317,6 +329,7 @@ window.Game = (() => {
     if (!deck.length) return false;
     const iid = deck.shift();
     place(s, iid, `${pid}:hand`);
+    fire(s, 'drawn', [s.cards[iid]]);
     return true;
   }
 
@@ -341,9 +354,9 @@ window.Game = (() => {
   function checkWinner(s) {
     if (s.winner) return;
     for (const pid of s.order) {
-      if (s.players[pid].fans >= G().FANS_TO_WIN) {
+      if (s.players[pid].fans >= winTarget(s)) {
         s.winner = pid;
-        log(s, null, `${nameOf(s, pid)} reached ${G().FANS_TO_WIN} fans and wins!`);
+        log(s, null, `${nameOf(s, pid)} reached ${winTarget(s)} fans and wins!`);
       }
     }
   }
@@ -410,6 +423,7 @@ window.Game = (() => {
     s.phase = 'race';
     s.step = 0;
     log(s, null, 'The Race begins. The mini lanes merge into one Lane.');
+    fireBoard(s, 'race starts');
   }
 
   // Start of a Tricks step: every face-down card in play is revealed.
@@ -419,6 +433,7 @@ window.Game = (() => {
     for (const c of list) c.faceDown = false;
     log(s, null, `Tricks step: revealed ${list.map(c => cardName(s, c.iid, false)).join(', ')}.`);
     for (const c of list) settlePayment(s, c.iid);
+    fire(s, 'revealed', list);
   }
 
   // Holding: when a player's Units (or Units & tricks) step begins, they get
@@ -431,12 +446,13 @@ window.Game = (() => {
       return owners.size === 1 && owners.has(pid);
     });
     if (!held.length) return;
+    fireBoard(s, 'hold', pid, c => ({ here: laneOf(c) || held[0] }));
     const gain = pts * held.length;
     // A hold that would win the match starts a showdown instead.
-    if (G().SHOWDOWN !== false && s.players[pid].fans + gain >= G().FANS_TO_WIN) {
+    if (G().SHOWDOWN !== false && s.players[pid].fans + gain >= winTarget(s)) {
       if (s.showdown) { log(s, null, `${nameOf(s, pid)} holds ${held.map(l => LANE_LABEL[l]).join(' and ')}, but a showdown is already on.`); return; }
       s.showdown = { pid, lane: held[0], lanes: held, pts: gain, active: false, made: s.round * 100 + s.ramp * 10 + s.step };
-      log(s, null, `${nameOf(s, pid)} holds ${held.map(l => LANE_LABEL[l]).join(' and ')} and would reach ${G().FANS_TO_WIN} fans! No fans yet: a SHOWDOWN starts at ${isMulti(s) ? 'the next Units step of another player' : `${nameOf(s, opp(s, pid))}'s next Units step`}.`);
+      log(s, null, `${nameOf(s, pid)} holds ${held.map(l => LANE_LABEL[l]).join(' and ')} and would reach ${winTarget(s)} fans! No fans yet: a SHOWDOWN starts at ${isMulti(s) ? 'the next Units step of another player' : `${nameOf(s, opp(s, pid))}'s next Units step`}.`);
       return;
     }
     s.players[pid].fans += gain;
@@ -444,9 +460,331 @@ window.Game = (() => {
     checkWinner(s);
   }
 
+  // ---------- card code (js/cardcode.js) ----------
+  // Rules written on cards. "while/always" rules change costs and might while
+  // the card is somewhere; "when" rules ask their owner "Do it / Skip?" when
+  // something happens; "ability" rules add a menu item.
+
+  // A seeded random number, kept in the state, so every copy agrees.
+  function rand(s) {
+    if (s.rng == null) s.rng = (s.seq * 2654435761 + s.log.length * 40503) >>> 0;
+    let t = (s.rng = (s.rng + 0x6D2B79F5) >>> 0);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  const pickN = (s, list, n) => {
+    const a = [...list];
+    const out = [];
+    while (a.length && out.length < n) out.push(a.splice(Math.floor(rand(s) * a.length), 1)[0]);
+    return out;
+  };
+  const rulesFor = (defs, c) => (window.CardCode && c && defs && defs[c.def] ? CardCode.rulesOf(defs[c.def]) : []);
+  // The lane a card is in (an environment counts as being in its lane).
+  const laneOf = c => (c && c.zone ? (c.zone.startsWith('lane:') ? c.zone.slice(5) : c.zone.startsWith('env:') ? c.zone.slice(4) : null) : null);
+  const inPlay = c => c && BOARD.includes(zoneKind(c.zone)) && zoneKind(c.zone) !== 'pool';
+
+  // Is a card where a "while …" rule needs it?
+  function placeOk(c, place) {
+    if (!c || c.faceDown) return false;
+    const k = zoneKind(c.zone);
+    switch (place) {
+      case 'board': return inPlay(c);
+      case 'lane': return LANES.includes(k);
+      case 'race': return k === 'race';
+      case 'base': return k === 'base';
+      case 'hand': return k === 'hand';
+      default: return false;
+    }
+  }
+  const PLACE_TEST = {
+    here: (c, ctx) => !!ctx.here && c.zone === 'lane:' + ctx.here,
+    lane: c => LANES.includes(zoneKind(c.zone)),
+    race: c => c.zone === 'lane:race',
+    base: c => zoneKind(c.zone) === 'base',
+    hand: c => zoneKind(c.zone) === 'hand',
+    trash: c => zoneKind(c.zone) === 'trash',
+    board: c => inPlay(c),
+  };
+  function kindOk(def, c, kind) {
+    const tok = !!(c.token || def.token);
+    switch (kind) {
+      case 'uma': return def.card_type === 'uma' || (tok && def.card_type !== 'trick');
+      case 'trick': return def.card_type === 'trick' && !Cards.isEnvironment(def);
+      case 'environment': return Cards.isEnvironment(def);
+      case 'token': return tok;
+      case 'trainer': return def.card_type === 'trainer' || def.card_type === 'gear';
+      case 'card': return def.card_type !== 'star';
+      default: return def.card_type === kind;
+    }
+  }
+  const CMP = { le: (a, b) => a <= b, ge: (a, b) => a >= b, lt: (a, b) => a < b, gt: (a, b) => a > b, eq: (a, b) => a === b, ne: (a, b) => a !== b };
+  const baseMight = (defs, c) => { const d = defs[c.def] || {}; return (Cards.hasMight(d) ? Number(d.might) : 0) + (c.might || 0) + (c.tmp || 0); };
+
+  // Does one card fit a selector? ctx: { src, owner, here }
+  function selMatches(s, defs, sel, c, ctx) {
+    if (!c) return false;
+    if (sel.me) return c.iid === ctx.src;
+    const def = defs[c.def];
+    if (!def || def.card_type === 'star') return false;
+    if (sel.rel === 'my' && c.owner !== ctx.owner) return false;
+    if (sel.rel === 'enemy' && c.owner === ctx.owner) return false;
+    if (sel.kinds.length && !sel.kinds.some(k => kindOk(def, c, k))) return false;
+    if (!sel.kinds.length && def.card_type === 'superhorse') return false;
+    if (sel.kinds.length && !sel.kinds.includes('card') && def.card_type === 'superhorse') return false;
+    if (sel.colors.length && !(def.types || []).some(t => sel.colors.includes(t))) return false;
+    if (sel.where && !PLACE_TEST[sel.where](c, ctx)) return false;
+    for (const f of sel.flags) {
+      if (f === 'conjured' && !c.conjured) return false;
+      if (f === 'champion' && !(c.champion || Cards.isChampion(def))) return false;
+      if (f === 'signature' && !Cards.isSignature(def)) return false;
+      if (f === 'exhausted' && !c.exhausted) return false;
+      if (f === 'ready' && c.exhausted) return false;
+      if (f === 'damaged' && !c.dmg) return false;
+      if (f === 'face-down' && !c.faceDown) return false;
+    }
+    for (const t of sel.tags) if (!(def.tags || []).includes(t)) return false;
+    for (const k of sel.keywords) if (!(def.keywords || []).some(x => x === k || Cards.kwSlug(x) === Cards.kwSlug(k))) return false;
+    for (const m of sel.cmp) {
+      const v = m.field === 'might' ? baseMight(defs, c) : Number(def[m.field === 'power' ? 'power' : 'energy'] || 0);
+      if (!CMP[m.op](v, numVal(s, defs, m.val, ctx))) return false;
+    }
+    return true;
+  }
+
+  // Every card that fits (actions without a place look at cards in play).
+  function selectAll(s, defs, sel, ctx) {
+    return Object.values(s.cards).filter(c => (sel.me || sel.where || inPlay(c)) && !c.attachedTo && selMatches(s, defs, sel, c, ctx)).map(c => c.iid);
+  }
+  function selectPick(s, defs, sel, ctx) {
+    const all = selectAll(s, defs, sel, ctx);
+    if (sel.me || sel.quant === 'all') return all;
+    return pickN(s, all, sel.n || 1);
+  }
+  function numVal(s, defs, n, ctx) {
+    if (!n) return 0;
+    if (n.n != null) return n.n;
+    if (n.count) return selectAll(s, defs, n.count, ctx).length;
+    if (n.mul) return numVal(s, defs, n.mul[0], ctx) * numVal(s, defs, n.mul[1], ctx);
+    return 0;
+  }
+
+  // All the "while/always" changes in effect right now.
+  function activeMods(s, defs) {
+    const out = [];
+    for (const c of Object.values(s.cards)) {
+      const rules = rulesFor(defs, c);
+      if (!rules.length) continue;
+      for (const r of rules) {
+        if ((r.kind !== 'while' && r.kind !== 'always') || !placeOk(c, r.place)) continue;
+        for (const m of r.mods) out.push({ m, ctx: { src: c.iid, owner: c.owner, here: laneOf(c) } });
+      }
+    }
+    return out;
+  }
+  // A card's cost after changes. stat: 'energy' | 'power'.
+  function effCost(s, defs, c, stat = 'energy', mods = activeMods(s, defs)) {
+    const def = defs[c.def] || {};
+    const base = Number(def[stat] || 0);
+    let d = 0;
+    for (const { m, ctx } of mods) {
+      if ((stat === 'energy' ? m.stat !== 'cost' : m.stat !== 'power')) continue;
+      if (selMatches(s, defs, m.sel, c, ctx)) d += m.delta;
+    }
+    return Math.max(0, base + d);
+  }
+  // Extra might from "… get +N might" rules.
+  function auraMight(s, defs, c, mods = activeMods(s, defs)) {
+    let d = 0;
+    for (const { m, ctx } of mods) if (m.stat === 'might' && selMatches(s, defs, m.sel, c, ctx)) d += m.delta;
+    return d;
+  }
+
+  // ----- "when" rules → questions for the owner -----
+  function fire(s, trigger, cards, ctxFor = () => ({})) {
+    const defs = s.defs;
+    if (!defs || !window.CardCode || s.phase === 'mulligan') return;
+    for (const c of cards) {
+      if (!c || c.faceDown) continue;
+      rulesFor(defs, c).forEach((r, idx) => {
+        if (r.kind !== 'when' || r.trigger !== trigger) return;
+        s.pending = s.pending || [];
+        if (s.pending.length >= 30) return;
+        const extra = ctxFor(c) || {};
+        s.pending.push({ n: (s.pendSeq = (s.pendSeq || 0) + 1), iid: c.iid, def: c.def, owner: c.owner, rule: idx,
+          here: extra.here !== undefined ? extra.here : laneOf(c), hidden: ['hand', 'deck', 'stars'].includes(zoneKind(c.zone)) });
+      });
+    }
+  }
+  const boardCardsOf = (s, pid) => Object.values(s.cards).filter(c => inPlay(c) && (!pid || c.owner === pid));
+  const fireBoard = (s, trigger, pid, ctxFor) => fire(s, trigger, boardCardsOf(s, pid), ctxFor);
+
+  function condOk(s, defs, cond, ctx) {
+    if (cond.not) return !condOk(s, defs, cond.not, ctx);
+    if (cond.is === 'race') return s.phase === 'race';
+    if (cond.is === 'ramp') return s.phase === 'ramp';
+    if (cond.is === 'contested') return !!ctx.here && contestedLanes(s).includes(ctx.here);
+    if (cond.is === 'holdHere') {
+      if (!ctx.here || ctx.here === 'race') return false;
+      const owners = new Set((s.zones['lane:' + ctx.here] || []).map(i => s.cards[i]).filter(c => c && !c.attachedTo).map(c => c.owner));
+      return owners.size === 1 && owners.has(ctx.owner);
+    }
+    const left = cond.left.fans ? s.players[ctx.owner].fans : cond.left.hand ? (s.zones[`${ctx.owner}:hand`] || []).length : numVal(s, defs, cond.left, ctx);
+    return CMP[cond.op](left, numVal(s, defs, cond.right, ctx));
+  }
+
+  // Where a code action sends a card.
+  function codeDest(s, c, dest, ctx) {
+    if (dest === 'here') return ctx.here || null;
+    if (dest === 'other lane') { const l = laneOf(c); return l === 'mini0' ? 'mini1' : l === 'mini1' ? 'mini0' : pickN(s, ['mini0', 'mini1'], 1)[0]; }
+    if (dest === 'random lane') {
+      if (s.phase === 'race') return 'race';
+      // During Ramps, units move between the mini lanes.
+      const l = laneOf(c);
+      const opts = ['mini0', 'mini1'].filter(x => x !== l);
+      return pickN(s, opts, 1)[0];
+    }
+    return dest;
+  }
+
+  // Run one rule's actions. Returns what happened, for the log.
+  function runActs(s, acts, ctx) {
+    const defs = s.defs;
+    const done = [];
+    const nm = iid => cardName(s, iid, false);
+    for (const a of acts) {
+      if (a.cond && !condOk(s, defs, a.cond, ctx)) { done.push('(condition not met)'); continue; }
+      try {
+        switch (a.verb) {
+          case 'move': {
+            const list = selectPick(s, defs, a.sel, ctx);
+            const moved = [];
+            for (const iid of list) {
+              const c = s.cards[iid];
+              const to = codeDest(s, c, a.dest, ctx);
+              if (!to || !c) continue;
+              const n0 = nm(iid);
+              moveCard(s, iid, to);
+              moved.push(`${n0} → ${({ base: 'base', hand: 'hand', trash: 'trash', race: 'Race lane', 'deck-top': 'deck', 'deck-bottom': 'deck' })[to] || LANE_LABEL[to] || to}`);
+            }
+            done.push(moved.length ? 'moved ' + moved.join(', ') : 'nothing to move');
+            break;
+          }
+          case 'conjure': {
+            const n = Math.min(10, numVal(s, defs, a.count, ctx));
+            const f = a.filter;
+            const src = defs[ctx.def] || {};
+            const leader = (s.zones[`${ctx.owner}:leader`] || [])[0];
+            const leaderId = leader && s.cards[leader] ? s.cards[leader].def : null;
+            const pool = Object.values(defs).filter(d => {
+              if (!d || d.card_type === 'star' || d.card_type === 'superhorse' || Cards.isToken(d)) return false;
+              const sig = f.signature;
+              if (sig === 'no' ? !!d.signature_of : !d.signature_of) return false;
+              if (sig === 'color' && !(d.types || []).some(t => (src.types || []).includes(t))) return false;
+              if (sig === 'mine' && leaderId && d.signature_of !== leaderId) return false;
+              if (f.kinds.length && !f.kinds.some(k => kindOk(d, {}, k))) return false;
+              if (f.colors.length && !(d.types || []).some(t => f.colors.includes(t))) return false;
+              if (f.flags.includes('champion') && !Cards.isChampion(d)) return false;
+              for (const t of f.tags) if (!(d.tags || []).includes(t)) return false;
+              for (const k of f.keywords) if (!(d.keywords || []).some(x => x === k || Cards.kwSlug(x) === Cards.kwSlug(k))) return false;
+              for (const m of f.cmp) if (!CMP[m.op](Number(d[m.field === 'power' ? 'power' : 'energy'] || 0), numVal(s, defs, m.val, ctx))) return false;
+              return true;
+            });
+            if (!pool.length) { done.push('no card fits that conjure'); break; }
+            const made = [];
+            for (let i = 0; i < n; i++) {
+              const d = pool[Math.floor(rand(s) * pool.length)];
+              const iid = addInstance(s, d.id, ctx.owner, null);
+              s.cards[iid].conjured = true;
+              place(s, iid, `${ctx.owner}:hand`);
+              const to = codeDest(s, s.cards[iid], a.dest, ctx);
+              if (to && to !== 'hand') moveCard(s, iid, to);
+              made.push(d.name);
+            }
+            const secret = a.dest === 'hand' || a.dest.startsWith('deck');
+            done.push(`conjured ${secret ? `${made.length} card${made.length > 1 ? 's' : ''}` : made.join(', ')}${a.dest === 'hand' ? ' into their hand' : ''}`);
+            fireBoard(s, 'i conjure', ctx.owner);
+            break;
+          }
+          case 'create': {
+            const want = a.token.toLowerCase();
+            const def = Object.values(defs).find(d => d && Cards.isToken(d) && (d.name.toLowerCase() === want || d.id === want || d.name.toLowerCase().replace(/s$/, '') === want));
+            if (!def) { done.push(`no token called "${a.token}"`); break; }
+            const n = Math.max(1, Math.min(10, numVal(s, defs, a.count, ctx)));
+            let k = 0;
+            for (let i = 0; i < n; i++) {
+              const iid = addInstance(s, def.id, ctx.owner, null);
+              s.cards[iid].token = true;
+              place(s, iid, `${ctx.owner}:hand`);
+              const to = codeDest(s, s.cards[iid], a.dest, ctx) || 'base';
+              moveCard(s, iid, BOARD.includes(to) || LANES.includes(to) ? to : 'base', { enterReady: a.ready });
+              k++;
+            }
+            done.push(`created ${k} ${def.name} token${k > 1 ? 's' : ''}`);
+            break;
+          }
+          case 'draw': { let g = 0; const n = numVal(s, defs, a.count, ctx); for (let i = 0; i < n; i++) if (drawOne(s, ctx.owner)) g++; done.push(`drew ${g}`); break; }
+          case 'discard': {
+            const list = pickN(s, s.zones[`${ctx.owner}:hand`] || [], numVal(s, defs, a.count, ctx));
+            const names = list.map(nm);
+            for (const iid of list) moveCard(s, iid, 'trash');
+            done.push(list.length ? `discarded ${names.join(', ')}` : 'nothing to discard');
+            break;
+          }
+          case 'channel': {
+            const stars = s.zones[`${ctx.owner}:stars`];
+            let g = 0;
+            for (let i = 0; i < numVal(s, defs, a.count, ctx) && stars.length; i++) { const iid = stars.shift(); s.cards[iid].exhausted = false; place(s, iid, `${ctx.owner}:pool`); g++; }
+            done.push(`channeled ${g} Star${g === 1 ? '' : 's'}`);
+            break;
+          }
+          case 'fans': {
+            const n = numVal(s, defs, a.count, ctx) * a.sign;
+            const who = a.who === 'me' ? [ctx.owner] : s.order.filter(p => p !== ctx.owner && !s.players[p].out);
+            for (const p of who) s.players[p].fans += n;
+            done.push(a.who === 'me' ? `${n >= 0 ? '+' : ''}${n} fans` : `each enemy ${n >= 0 ? '+' : ''}${n} fans`);
+            checkWinner(s);
+            break;
+          }
+          case 'might': case 'tempMight': case 'damage': case 'heal': case 'exhaust': case 'ready': case 'trash': case 'banish': {
+            const list = selectPick(s, defs, a.sel, ctx);
+            const names = list.map(nm);
+            for (const iid of list) {
+              const c = s.cards[iid];
+              if (!c) continue;
+              if (a.verb === 'might') c.might = (c.might || 0) + a.delta;
+              else if (a.verb === 'tempMight') c.tmp = (c.tmp || 0) + a.delta;
+              else if (a.verb === 'damage') c.dmg = (c.dmg || 0) + numVal(s, defs, a.count, ctx);
+              else if (a.verb === 'heal') c.dmg = 0;
+              else if (a.verb === 'exhaust') c.exhausted = true;
+              else if (a.verb === 'ready') c.exhausted = false;
+              else moveCard(s, iid, a.verb === 'trash' ? 'trash' : 'banish');
+            }
+            const what = { might: `${a.delta > 0 ? '+' : ''}${a.delta} might to`, tempMight: `${a.delta > 0 ? '+' : ''}${a.delta} temp might to`, damage: `${numVal(s, defs, a.count, ctx)} damage to`, heal: 'healed', exhaust: 'exhausted', ready: 'readied', trash: 'trashed', banish: 'banished' }[a.verb];
+            done.push(names.length ? `${what} ${names.join(', ')}` : `no card to ${a.verb === 'tempMight' ? 'boost' : a.verb}`);
+            break;
+          }
+          case 'revealHand': s.players[ctx.owner].revealHand = true; done.push('revealed their hand'); break;
+          default: done.push(`(unknown action ${a.verb})`);
+        }
+      } catch (e) {
+        done.push(`(${a.verb} failed: ${e.message})`);
+      }
+    }
+    return done.join('; ');
+  }
+
+  // What a pending effect says (for the prompt).
+  function pendingText(s, defs, p) {
+    const def = defs[p.def];
+    const r = rulesFor(defs, { def: p.def })[p.rule];
+    return { name: def ? def.name : 'A card', text: r ? CardCode.explain(r) : '(this rule changed)' };
+  }
+
   // Start of every Ramp: set up, then the first player's Units step begins.
   function startOfRamp(s) {
     rampSetup(s);
+    fireBoard(s, 'ramp starts');
     unitsStepBegins(s, s.order[s.rampFirst]);
   }
 
@@ -458,6 +796,7 @@ window.Game = (() => {
       log(s, null, `SHOWDOWN! ${nameOf(s, s.showdown.pid)} goes for the win (${(s.showdown.lanes || [s.showdown.lane]).map(l => LANE_LABEL[l]).join(' and ')}). Fight it out, then press who won the showdown.`);
     }
     scoreHolds(s, pid);
+    fireBoard(s, 'my units step', pid);
   }
 
   // Both players ready everything, channel Stars, draw 1.
@@ -571,6 +910,7 @@ window.Game = (() => {
         banish: 'to banishment (out of the game)', champion: 'to their Champion zone',
       }[dest] || 'somewhere';
       const verb = (wasHidden || fromKind === 'champion') && BOARD.includes(dest) ? 'played' : 'moved';
+      if (verb === 'played' && !opts.faceDown && s.cards[iid]) fire(s, 'played', [s.cards[iid]]);
       return `${verb} ${nm} ${where}`;
     },
 
@@ -753,6 +1093,7 @@ window.Game = (() => {
       const c = s.cards[iid];
       c.faceDown = !c.faceDown;
       if (!c.faceDown) settlePayment(s, iid);
+      if (!c.faceDown && inPlay(c)) fire(s, 'revealed', [c]);
       return c.faceDown ? 'turned a card face-down' : `revealed ${cardName(s, iid)}`;
     },
 
@@ -766,6 +1107,7 @@ window.Game = (() => {
       // Spells (tricks) never go onto the table: they go on the chain, then to the trash.
       // Environments are the exception: they go to an environment slot.
       if (d0 && d0.card_type === 'trick' && !(d0.keywords || []).includes('environment') && !opts.faceDown) dest = 'trash';
+      if (d0 && d0.card_type === 'trick' && !opts.faceDown) fire(s, 'enemy trick', boardCardsOf(s).filter(x => x.owner !== me));
       if (opts.faceDown) {
         if (!opts.noPay) payCost(s, me, iid, true); // paid now, shown to the opponent when revealed
         moveCard(s, iid, dest, opts);
@@ -812,12 +1154,14 @@ window.Game = (() => {
         text = `resolved ${cardName(s, item.iid)}'s ability`;
       } else if (item.kind === 'unit') {
         text = `resolved ${cardName(s, item.iid, false)}`;
+        if (s.cards[item.iid]) fire(s, 'played', [s.cards[item.iid]]);
       } else {
         const nm = cardName(s, item.iid, false);
         const target = item.attachTo && s.cards[item.attachTo];
         if (target && BOARD.includes(zoneKind(target.zone))) A.attach(s, item.by, item.iid, item.attachTo);
         else moveCard(s, item.iid, item.dest && item.dest !== 'attach' ? item.dest : 'base');
         text = `resolved ${nm}`;
+        if (s.cards[item.iid]) fire(s, 'played', [s.cards[item.iid]], () => ({ here: item.dest && LANES.includes(item.dest) ? item.dest : laneOf(s.cards[item.iid]) }));
       }
       s.priority = s.chain.length ? nextPlayer(s, s.chain[s.chain.length - 1].by) : null;
       return text;
@@ -892,6 +1236,7 @@ window.Game = (() => {
       s.cards[iid].conjured = true;
       place(s, iid, `${me}:hand`);
       if (dest !== 'hand') moveCard(s, iid, dest);
+      fireBoard(s, 'i conjure', me);
       return `conjured ${s.defs[defId].name}${dest === 'hand' ? ' into their hand' : ''}`;
     },
 
@@ -908,6 +1253,7 @@ window.Game = (() => {
         made.push(s.defs[id].name);
       }
       if (!made.length) throw new Error('Nothing to conjure.');
+      fireBoard(s, 'i conjure', me);
       const where = ({ hand: 'into their hand', base: 'onto their base', 'deck-top': 'onto the top of their deck' })[dest] || '';
       // Cards going to hand or deck stay secret from the other player.
       const what = dest === 'base' ? made.join(', ') : `${made.length} card${made.length > 1 ? 's' : ''}`;
@@ -954,6 +1300,7 @@ window.Game = (() => {
         const st = stepInfo(s);
         if (st.kind === 'units' || st.kind === 'unitsTricks') unitsStepBegins(s, st.who);
         if (s.step === firstTricksStep(s)) revealFaceDown(s);
+        if (st.kind === 'tricks' || st.kind === 'unitsTricks') fireBoard(s, 'my tricks step', st.who);
         return null;
       }
       log(s, me, 'passed.');
@@ -1024,6 +1371,7 @@ window.Game = (() => {
     },
 
     endRace(s, me) {
+      fireBoard(s, 'race ends');
       if (G().ENVIRONMENTS_AFTER_RACE !== 'stay') {
         for (const k of ENV_SLOTS) for (const iid of [...(s.zones[k] || [])]) {
           const nm = cardName(s, iid, false);
@@ -1072,6 +1420,38 @@ window.Game = (() => {
       return null;
     },
 
+    // ----- card code -----
+    // "Do it" on a card's triggered effect.
+    resolveEffect(s, me, n) {
+      const i = (s.pending || []).findIndex(p => p.n === n);
+      if (i < 0) throw new Error('That effect is no longer waiting.');
+      const p = s.pending[i];
+      if (p.owner !== me && !(s.players[p.owner] && s.players[p.owner].out)) throw new Error(`Only ${nameOf(s, p.owner)} can decide on that effect.`);
+      s.pending.splice(i, 1);
+      const r = rulesFor(s.defs, { def: p.def })[p.rule];
+      if (!r || !r.acts) return `skipped an effect that no longer exists`;
+      const res = runActs(s, r.acts, { src: s.cards[p.iid] ? p.iid : null, owner: p.owner, here: p.here, def: p.def });
+      return `used ${(s.defs[p.def] || {}).name || 'a card'}'s effect: ${res}`;
+    },
+    skipEffect(s, me, n) {
+      const i = (s.pending || []).findIndex(p => p.n === n);
+      if (i < 0) throw new Error('That effect is no longer waiting.');
+      const p = s.pending[i];
+      if (p.owner !== me && !(s.players[p.owner] && s.players[p.owner].out)) throw new Error(`Only ${nameOf(s, p.owner)} can decide on that effect.`);
+      s.pending.splice(i, 1);
+      return p.hidden ? 'skipped a card effect' : `skipped ${(s.defs[p.def] || {}).name || 'a card'}'s effect`;
+    },
+    // An "ability:" line from a card's code, used from its menu.
+    codeAbility(s, me, iid, idx) {
+      const c = s.cards[iid];
+      if (!c || !inPlay(c)) throw new Error('Only cards in play can use abilities.');
+      if (c.owner !== me) throw new Error("That's not your card.");
+      const r = rulesFor(s.defs, c)[idx];
+      if (!r || r.kind !== 'ability') throw new Error('That ability no longer exists.');
+      const res = runActs(s, r.acts, { src: iid, owner: me, here: laneOf(c), def: c.def });
+      return `used ${cardName(s, iid, false)}'s ability: ${res}`;
+    },
+
     note(s, me, text) {
       return String(text).slice(0, 120);
     },
@@ -1118,5 +1498,6 @@ window.Game = (() => {
     ENV_SLOTS, ENV_LABEL, zoneKind, zoneOwner, rampText, phaseTrack, attachmentsOf, chainDestText,
     shownExhausted, contestedLanes, isCheckpoint, RAMPS,
     buildRoomMatch, isMulti, nextPlayer, others, CHECK, stepInfo,
+    activeMods, effCost, auraMight, pendingText, rulesFor, winTarget,
   };
 })();

@@ -324,7 +324,8 @@ window.Cards = (() => {
       textBox(def),
       might,
       isToken(def) ? null : h('span', { class: 'rarity-gem', title: rar.label }, rar.gem),
-      size === 's' ? (isToken(def)
+      // (No small label on Superhorses: it covered their name.)
+      size === 's' && def.card_type !== 'superhorse' ? (isToken(def)
         ? h('span', { class: 'card-kind kind-token' }, 'Token')
         : isEnvironment(def)
         ? h('span', { class: 'card-kind kind-environment' }, 'Env')
@@ -353,12 +354,22 @@ window.Cards = (() => {
     { id: 'gold', label: 'Gold' }, { id: 'silver', label: 'Silver' }, { id: 'rainbow', label: 'Rainbow foil' },
     { id: 'black', label: 'Black' }, { id: 'white', label: 'White' }, { id: 'none', label: 'No border' },
   ];
+  // The card back image chosen in the Admin panel (null = the built-in back).
+  let cardBack = null;
+  const setCardBack = url => { cardBack = url || null; };
+  const getCardBack = () => cardBack;
+  const cssUrl = u => `url("${u.startsWith('data:') || u.startsWith('blob:') ? u : encodeURI(u)}")`;
+
   function renderBack(size = 's', label, sleeve) {
-    if (!sleeve || (!sleeve.image_url && !sleeve.border)) return h('div', { class: `card card-back sz-${size}` }, h('span', null, label || ''));
+    if (!sleeve || (!sleeve.image_url && !sleeve.border)) {
+      if (cardBack) return h('div', { class: `card card-back custom-back sz-${size}`, style: { '--back-img': cssUrl(cardBack) } }, h('span', null, label || ''));
+      return h('div', { class: `card card-back sz-${size}` }, h('span', null, label || ''));
+    }
     const b = sleeve.border || 'gold';
     const custom = /^#[0-9a-f]{3,8}$/i.test(b);
     const style = custom ? { '--sleeve': b } : {};
-    if (sleeve.image_url) style['--sleeve-img'] = `url("${sleeve.image_url.startsWith('data:') || sleeve.image_url.startsWith('blob:') ? sleeve.image_url : encodeURI(sleeve.image_url)}")`;
+    if (sleeve.image_url) style['--sleeve-img'] = cssUrl(sleeve.image_url);
+    else if (cardBack) style['--sleeve-img'] = cssUrl(cardBack); // a border-only sleeve over the admin's card back
     return h('div', { class: `card card-back sleeved sz-${size} sb-${custom ? 'custom' : b}${sleeve.image_url ? ' has-img' : ''}`, style },
       h('span', { class: 'sleeve-shine', 'aria-hidden': 'true' }), label ? h('span', { class: 'sleeve-label' }, label) : null);
   }
@@ -428,5 +439,5 @@ window.Cards = (() => {
     return errs;
   }
 
-  return { CONJURE_SIG, KW_GROUPS, kwSlug, setCustomKeywords, SLEEVE_BORDERS, TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjuresOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, starDef, validate, hasMight, monogram };
+  return { CONJURE_SIG, KW_GROUPS, kwSlug, setCustomKeywords, SLEEVE_BORDERS, TOKENS, isToken, TAGS, TAG_LABEL, tagLabel, isSignature, isChampion, isEnvironment, CONJURE_DEFAULT, conjureOf, conjuresOf, conjureMatches, conjureSummary, TYPES, TYPE_LABEL, CARD_TYPES, CARD_TYPE_LABEL, RARITIES, RARITY, isFullArt, KEYWORDS, KEYWORD, SYMBOLS, richText, keywordBadge, inlineKeywords, render, renderStar, renderBack, setCardBack, getCardBack, starDef, validate, hasMight, monogram };
 })();

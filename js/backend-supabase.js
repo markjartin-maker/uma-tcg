@@ -24,6 +24,9 @@ window.SupabaseBackend = class SupabaseBackend {
       if (/cards_keywords_check/.test(error.message || '')) {
         throw new Error('Your database needs the latest update to use custom keywords: in Supabase, open SQL Editor and run supabase/11-keywords.sql, then try again.');
       }
+      if (/'code' column|cards\.code|column "code"|cards_code_length/.test(error.message || '')) {
+        throw new Error('Your database needs the latest update to save card code: in Supabase, open SQL Editor and run supabase/14-card-code.sql, then try again.');
+      }
       if (/play_anim/.test(error.message || '')) {
         throw new Error('Your database needs the latest update: in Supabase, open SQL Editor and run supabase/12-animations.sql, then try again.');
       }
@@ -125,6 +128,7 @@ window.SupabaseBackend = class SupabaseBackend {
     if (card.signature_of !== undefined) row.signature_of = card.signature_of || null;
     if (card.is_token !== undefined) row.is_token = !!card.is_token;
     if (card.play_anim !== undefined) row.play_anim = card.play_anim || null;
+    if (card.code !== undefined) row.code = (card.code || '').trim() || null;
     if (imageFile) row.image_url = await this.uploadImage(imageFile);
     if (card.id) return this.check(await this.sb.from('cards').update(row).eq('id', card.id).select().single());
     return this.check(await this.sb.from('cards').insert(row).select().single());
@@ -156,7 +160,9 @@ window.SupabaseBackend = class SupabaseBackend {
     return data;
   }
   async saveAnimation(a) {
-    const row = { name: a.name.trim(), kind: a.kind, config: a.kind === 'preset' ? a.config : null, code: a.kind === 'code' ? a.code : null, duration: Number(a.duration) };
+    // Code animations keep only their sound in config.
+    const snd = a.config && a.config.sound ? { sound: a.config.sound } : null;
+    const row = { name: a.name.trim(), kind: a.kind, config: a.kind === 'preset' ? a.config : snd, code: a.kind === 'code' ? a.code : null, duration: Number(a.duration) };
     try {
       if (a.id) return this.check(await this.sb.from('animations').update(row).eq('id', a.id).select().single());
       return this.check(await this.sb.from('animations').insert(row).select().single());
@@ -173,6 +179,35 @@ window.SupabaseBackend = class SupabaseBackend {
     const path = `${this.me.id}/${U.uid()}.${ext}`;
     this.check(await this.sb.storage.from('card-art').upload(path, file, { contentType: file.type }));
     return this.sb.storage.from('card-art').getPublicUrl(path).data.publicUrl;
+  }
+
+  // Upload a sound file to your folder in the sounds bucket.
+  async uploadSound(file) {
+    const ext = (file.name.split('.').pop() || 'mp3').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const path = `${this.me.id}/${U.uid()}.${ext}`;
+    const { error } = await this.sb.storage.from('sounds').upload(path, file, { contentType: file.type || 'audio/mpeg' });
+    if (error) {
+      if (/bucket not found/i.test(error.message || '')) throw new Error('Your database needs the latest update to upload sounds: in Supabase, open SQL Editor and run supabase/15-admin-settings.sql, then try again.');
+      if (/mime|type/i.test(error.message || '')) throw new Error('That file type isn\'t allowed. Use an MP3, OGG, WAV, M4A or WebM sound.');
+      if (/size|large/i.test(error.message || '')) throw new Error('That sound is too big (5 MB max).');
+      throw new Error(error.message);
+    }
+    return this.sb.storage.from('sounds').getPublicUrl(path).data.publicUrl;
+  }
+
+  // ----- admin panel settings (sounds, card back) -----
+  async getSettings() {
+    const { data, error } = await this.sb.from('app_settings').select('key, value');
+    if (error) { if (/app_settings/.test(error.message || '')) return {}; throw new Error(error.message); }
+    return Object.fromEntries((data || []).map(r => [r.key, r.value]));
+  }
+  async saveSetting(key, value) {
+    const { error } = await this.sb.from('app_settings').upsert({ key, value, updated_at: new Date().toISOString() });
+    if (error) {
+      if (/app_settings/.test(error.message || '')) throw new Error('Your database needs the latest update for the admin panel: in Supabase, open SQL Editor and run supabase/15-admin-settings.sql, then try again.');
+      if (/row-level security/i.test(error.message || '')) throw new Error('Only admins can change these settings.');
+      throw new Error(error.message);
+    }
   }
 
   // Admin: add the sample cards + two sample decks to the real pool.

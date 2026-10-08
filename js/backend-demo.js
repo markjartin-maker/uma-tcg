@@ -74,6 +74,10 @@ window.DemoBackend = class DemoBackend {
   async listDecks() { return this.decks.map(d => U.clone(d)); }
   async getDeck(id) { const d = this.decks.find(x => x.id === id); return d ? U.clone(d) : null; }
   async uploadImage(file) { return URL.createObjectURL(file); }
+  async uploadSound(file) { return URL.createObjectURL(file); }
+  // Admin panel settings (only in this browser tab, in the demo).
+  async getSettings() { return U.clone(this.settings || {}); }
+  async saveSetting(key, value) { this.settings = this.settings || {}; this.settings[key] = U.clone(value); }
   async listKeywords() { return (this.keywords || []).map(k => ({ ...k })); }
   async saveKeyword(k) {
     this.keywords = this.keywords || [];
@@ -274,12 +278,24 @@ window.DemoBackend = class DemoBackend {
       'Mudlark': { kind: 'trick', energyOp: 'le', energy: 1, colors: ['guts'], dest: 'hand' },
     };
     const sigs = { 'Photo Finish': 'Northern Gale', 'Ringside Chant': 'Granite Heart' };
+    // Card code samples (Card maker → Advanced → Card code).
+    const code = {
+      'Pocket Comet': ['when i hold: move me to random lane; conjure uma to here', 'When you hold a mini lane: move this to a random lane and conjure an Uma where it was.'],
+      'Chess Clock': ['when revealed: exhaust random enemy uma'],
+      'Starting Gate Jitters': ['when played: exhaust random enemy uma'],
+      'Stopwatch Coach': ['ability (Exhaust: draw a card): exhaust me; draw 1'],
+      'Heavy Track Specialist': ['while in race: me get +2 might'],
+      'Rainy Day': ['while on board: enemy umas here get -1 might'],
+      'Heavy Going': ['while on board: my guts umas here get +1 might'],
+      'Bulldog Stride': ['while on board: enemy tricks cost +1', 'While this is in play, enemy tricks cost {E1} more.'],
+    };
     const idOf = n => 'sample-' + n.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     return DemoBackend.sampleCards().map(c => ({
       signature_of: sigs[c.name] ? idOf(sigs[c.name]) : null,
       ...c, rarity: (rar[c.name] || ['common'])[0], full_art: !!(rar[c.name] || [])[1], subtitle: subs[c.name] || null,
       tags: tags[c.name] || [], conjure: conj[c.name] ? { ...Cards.CONJURE_DEFAULT, ...conj[c.name] } : null,
       keywords: conj[c.name] && !c.keywords.includes('conjure') ? [...c.keywords, 'conjure'] : c.keywords,
+      ...(code[c.name] ? { code: code[c.name][0], effect: code[c.name][1] || c.effect } : {}),
     }));
   }
 

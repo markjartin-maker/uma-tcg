@@ -35,7 +35,8 @@ window.CONFIG = {
     // use) goes on the chain; the other player can respond or resolve.
     // Set to false to play cards straight onto the table.
     USE_CHAIN: true,
-    FANS_TO_WIN: 1000,
+    // Fans needed to win, by number of players: 1v1, 1v1v1, 1v1v1v1.
+    FANS_TO_WIN: { 2: 1000, 3: 750, 4: 600 },
     MINI_LANE_FANS: 50,   // fans per mini lane you hold
     // Holding: when your Units (or Units & tricks) step begins, you get
     // MINI_LANE_FANS for each mini lane where only your cards are.

@@ -16,6 +16,7 @@ window.Table = (() => {
     if (!m.state.ramp) m.state.ramp = 1;
     ui = {
       el, id: matchId, defs: m.defs, row: m, viewAs: isPlayer ? App.me.id : m.p1,
+      winSeen: m.state.winner || null, // the victory animation plays once, when someone wins while you watch
       hotseat: App.backend.mode === 'demo', inspect: null, menu: null,
       pick: null, // {kind: 'target'|'attach', iid}
       seenPings: new Set((m.state.pings || []).map(p => p.n)),
@@ -75,6 +76,7 @@ window.Table = (() => {
     // Fresh match: show the dice roll for who goes first.
     const s0 = S();
     if (s0.dice && s0.phase === 'mulligan' && !Object.keys(s0.mulligan || {}).length) {
+      Sound.play('match_start');
       // The clash: both Superhorses face off, then the dice drop in as the bolts fade.
       const lead = pid => { const c = (s0.zones[pid + ':leader'] || []).map(i => s0.cards[i])[0]; return c ? def(c) : null; };
       const my = me(), op = Game.opp(s0, my);
@@ -95,6 +97,7 @@ window.Table = (() => {
   const seatColor = pid => SEAT_COLORS[Math.max(0, S().order.indexOf(pid)) % SEAT_COLORS.length];
   const S = () => ui.row.state;
   const def = c => ui.defs[c.def] || { name: 'Unknown card', card_type: 'uma', types: ['speed'] };
+  const cap1 = t => String(t).charAt(0).toUpperCase() + String(t).slice(1);
 
   // Shows the result instantly, then saves it to the server in the background.
   // If the server disagrees (e.g. the other player acted at the same moment),
@@ -160,6 +163,8 @@ window.Table = (() => {
     hidePeek();
     ui.anims = [];
     const s = S();
+    // Card code: cost and might changes in effect right now.
+    try { ui.mods = Game.activeMods(s, ui.defs); } catch (e) { ui.mods = []; }
     // Chain items nobody has seen yet on this screen (for the Signature effect).
     const freshChain = (s.chain || []).filter(it => !ui.seenChain.has(it.n));
     const my = me();
@@ -188,7 +193,7 @@ window.Table = (() => {
       log: (ui.el.querySelector('.log-list') || {}).scrollTop || 0 };
     board.addEventListener('contextmenu', e => e.preventDefault());
     const hud = hudEl();
-    const scroller = h('div', { class: 'board-scroll' }, board, s.phase === 'mulligan' ? mulliganEl() : null, selBarEl(), floatEl());
+    const scroller = h('div', { class: 'board-scroll' }, board, s.phase === 'mulligan' ? mulliganEl() : null, selBarEl(), floatEl(), pendingEl());
     bindBoxSelect(scroller);
     const side = sidebarEl();
     scroller.addEventListener('scroll', () => requestAnimationFrame(drawArrows), { passive: true });
@@ -242,17 +247,35 @@ window.Table = (() => {
     ui.prevFD = new Set(Object.values(s.cards).filter(c => c.faceDown && Game.BOARD.includes(Game.zoneKind(c.zone))).map(c => c.iid));
     const withAnim = played.filter(x => def(x.c).play_anim && Anim.get(def(x.c).play_anim)).pop();
     const sig = played.filter(x => Cards.isSignature(def(x.c))).pop();
-    if (withAnim && Anim.play(Anim.get(def(withAnim.c).play_anim), { def: def(withAnim.c), player: Game.nameOf(s, withAnim.by), mine: withAnim.by === me() })) { /* played */ }
+    // Sounds: a card's animation sound, else the Signature sound, else "Card played".
+    const animPlayed = !!withAnim && Anim.play(Anim.get(def(withAnim.c).play_anim), { def: def(withAnim.c), player: Game.nameOf(s, withAnim.by), mine: withAnim.by === me() });
+    const animSound = animPlayed && ((Anim.get(def(withAnim.c).play_anim).config || {}).sound || {}).url;
+    if (animPlayed) { if (!animSound) Sound.play('card_played'); }
     else if (sig) signatureFx(sig.c, sig.by);
-    else if (!s.winner && ((ui.turnKey && ui.turnKey !== turnKey) || (callKey && ui.callKey !== callKey && ui.turnKey))) splash();
+    else if (played.length) Sound.play('card_played');
+    ui.cardSoundAt = played.length ? Date.now() : ui.cardSoundAt;
+    // The turn splash only when no card moment is showing.
+    if (!animPlayed && !sig && !s.winner && ((ui.turnKey && ui.turnKey !== turnKey) || (callKey && ui.callKey !== callKey && ui.turnKey))) splash();
     ui.turnKey = turnKey;
     ui.callKey = callKey;
+    const fightKey = s.fight && !s.fight.result && s.phase === 'ramp' ? turnKey : '';
+    if (fightKey && ui.fightKey !== undefined && ui.fightKey !== fightKey) Sound.play('fight_check');
+    ui.fightKey = fightKey;
+    if (s.phase === 'race' && ui.lastPhase === 'ramp') Sound.play('race_start');
+    ui.lastPhase = s.phase;
     if (ui.pick) {
       ui.el.prepend(h('div', { class: 'pick-banner', role: 'status' },
         ui.pick.kind === 'target' ? 'Click the card to point at.' : 'Click the card to attach to.',
         h('button', { class: 'btn ghost sm', on: { click: () => { ui.pick = null; draw(); } } }, 'Cancel (Esc)')));
     }
     if (s.winner) ui.el.append(winnerEl());
+    if (s.winner && ui.winSeen !== s.winner) {
+      ui.winSeen = s.winner;
+      const lc = (s.zones[s.winner + ':leader'] || []).map(i => s.cards[i])[0];
+      Anim.stop();
+      Sound.play(s.winner === me() ? 'victory' : 'defeat');
+      Anim.victory({ def: lc ? def(lc) : null, name: Game.nameOf(s, s.winner), mine: s.winner === me(), sleeve: sleeveOf(s.winner) });
+    }
     requestAnimationFrame(drawArrows);
     // mark pings as seen after they've animated once
     for (const p of s.pings || []) ui.seenPings.add(p.n);
@@ -289,6 +312,33 @@ window.Table = (() => {
             h('button', { class: 'btn primary', on: { click: () => act('mulligan', 'keep') } }, 'Keep hand'),
             h('button', { class: 'btn', on: { click: () => act('mulligan', 'redraw') } }, `Mulligan (draw ${n} new)`))],
       h('p', { class: 'hint' }, rest.map(p => `${Game.nameOf(s, p)}: ${s.mulligan[p] ? 'decided' : 'deciding…'}`).join(' · ')));
+  }
+
+  // Card code: a triggered effect asks its owner first ("Do it" / "Skip").
+  function pendingEl() {
+    const s = S();
+    const list = s.pending || [];
+    if (!list.length || s.winner) return null;
+    const mine = list.filter(p => p.owner === me() || (s.players[p.owner] && s.players[p.owner].out));
+    if (mine.length) {
+      const p = mine[0];
+      const t = Game.pendingText(s, ui.defs, p);
+      const d = ui.defs[p.def];
+      const fresh = ui.lastAsk !== p.n;
+      ui.lastAsk = p.n;
+      if (fresh) Sound.play('effect_ask');
+      return h('div', { class: 'effect-ask' + (fresh ? ' enter' : ''), role: 'dialog', 'aria-label': 'Card effect' },
+        d ? h('div', { class: 'effect-card', on: { mouseenter: e => { const c = s.cards[p.iid]; if (c) showPeek(c, e.currentTarget); }, mouseleave: hidePeek } }, Cards.render(d, { size: 's' })) : null,
+        h('div', { class: 'effect-body' },
+          h('p', { class: 'eyebrow' }, `✦ ${t.name}${mine.length > 1 ? ` · ${mine.length - 1} more waiting` : ''}`),
+          h('p', { class: 'effect-text' }, t.text),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary', on: { click: () => act('resolveEffect', p.n) } }, 'Do it'),
+            h('button', { class: 'btn ghost', on: { click: () => act('skipEffect', p.n) } }, 'Skip'))));
+    }
+    const p = list[0];
+    const nm = p.hidden ? 'a card' : (ui.defs[p.def] || {}).name || 'a card';
+    return h('div', { class: 'effect-wait', role: 'status' }, `✦ Waiting for ${Game.nameOf(s, p.owner)} to decide on ${nm}'s effect…`);
   }
 
   function winnerEl() {
@@ -516,11 +566,41 @@ window.Table = (() => {
     }
   }
 
+  const auraOf = c => { try { return Game.auraMight(S(), ui.defs, c, ui.mods); } catch (e) { return 0; } };
   function mightOf(c) {
     if (c.faceDown && c.owner !== me()) return 0;
     const d = def(c);
-    if (!Cards.hasMight(d)) return (c.might || 0) + (c.tmp || 0);
-    return Number(d.might) + (c.might || 0) + (c.tmp || 0);
+    const aura = Game.BOARD.includes(Game.zoneKind(c.zone)) ? auraOf(c) : 0;
+    if (!Cards.hasMight(d)) return (c.might || 0) + (c.tmp || 0) + aura;
+    return Number(d.might) + (c.might || 0) + (c.tmp || 0) + aura;
+  }
+
+  // Card code changes, drawn onto a card face: cost badges and might.
+  function codeMarks(face, c, d, kind) {
+    if (!ui.mods || !ui.mods.length) return;
+    const s = S();
+    const eff = Game.effCost(s, ui.defs, c, 'energy', ui.mods);
+    const base = Number(d.energy || 0);
+    const ce = face.querySelector('.card-costs .cost-e');
+    if (ce && eff !== base) {
+      ce.textContent = eff;
+      ce.classList.add(eff > base ? 'mod-up' : 'mod-down');
+      ce.title = `Energy cost ${eff} right now (printed ${base}), changed by a card in play`;
+    }
+    const pe = Game.effCost(s, ui.defs, c, 'power', ui.mods);
+    const pb = Number(d.power || 0);
+    const costs = face.querySelector('.card-costs');
+    if (costs && pe !== pb) costs.append(h('span', { class: 'cost-pmod ' + (pe > pb ? 'mod-up' : 'mod-down'), title: `Power cost ${pe} right now (printed ${pb})` }, `${pe > pb ? '+' : '−'}${Math.abs(pe - pb)}★`));
+    if (Game.BOARD.includes(kind)) {
+      const aura = auraOf(c);
+      const mt = face.querySelector('.card-might');
+      if (aura && mt && Cards.hasMight(d)) {
+        const total = Number(d.might) + (c.might || 0) + aura;
+        mt.querySelector('.might-n').textContent = total;
+        mt.classList.remove('up', 'down');
+        mt.classList.add(total > Number(d.might) ? 'up' : 'down');
+      }
+    }
   }
 
   function cardEl(c) {
@@ -540,6 +620,7 @@ window.Table = (() => {
       } else if (c.might && !Cards.hasMight(d)) {
         face.append(h('div', { class: 'card-might ' + (c.might > 0 ? 'up' : 'down') }, h('span', { class: 'might-n' }, (c.might > 0 ? '+' : '') + c.might)));
       }
+      codeMarks(face, c, d, kind);
     }
     const newPing = (s.pings || []).some(p => p.iid === c.iid && !ui.seenPings.has(p.n));
     const canDrag = canMove(c);
@@ -880,6 +961,9 @@ window.Table = (() => {
     if (c.dmg || c.might || c.tmp) it('Clear counters', () => act('clearCounters', c.iid));
     if (!mine) it('Ping', () => act('ping', c.iid));
     if (G().USE_CHAIN !== false) it('Use ability (to the chain)', () => act('ability', c.iid));
+    if (mine && !c.faceDown) Game.rulesFor(ui.defs, c).forEach((r, i) => {
+      if (r.kind === 'ability') it(`✦ ${r.label ? cap1(r.label) : CardCode.explain(r).replace(/^Ability: /, '')}`, () => act('codeAbility', c.iid, i), 'code-ability');
+    });
     it('Target another card…', () => { ui.pick = { kind: 'target', iid: c.iid }; draw(); });
     items.push(...conjureItems(c));
     if (kind === 'env') {
@@ -941,8 +1025,9 @@ window.Table = (() => {
     const lanes = s.phase === 'race' ? ['race'] : ['mini0', 'mini1'];
     const d = def(c);
     const pay = h('input', { type: 'checkbox', id: 'fd-pay', checked: true });
+    const en = Game.effCost(s, ui.defs, c, 'energy', ui.mods), pw = Game.effCost(s, ui.defs, c, 'power', ui.mods);
     const m = U.modal('Play face-down', h('div', { class: 'stack' },
-      h('label', { class: 'check', for: 'fd-pay' }, pay, `Pay its cost automatically (${d.energy || 0} energy${d.power ? `, ${d.power} power` : ''})`),
+      h('label', { class: 'check', for: 'fd-pay' }, pay, `Pay its cost automatically (${en} energy${pw ? `, ${pw} power` : ''})`),
       h('p', { class: 'muted' }, 'For In the Shadows cards. Its cost is paid automatically from your Stars, but your opponent only sees the card back (and your Stars as they were) until it\'s revealed. Face-down cards are revealed when the next Tricks step starts.'),
       h('div', { class: 'row' }, lanes.map(l => h('button', { class: 'btn', on: { click: () => { m.close(); act('play', c.iid, l, { faceDown: true, noPay: !pay.checked }); } } }, Game.LANE_LABEL[l])))));
   }
@@ -962,7 +1047,7 @@ window.Table = (() => {
           h('span', { class: 'counter-val', 'aria-live': 'polite' }, x.value ?? ''),
           h('button', { class: 'icon-btn sm', 'aria-label': x.counter + ' plus 1', dataset: { k: x.counter + '+' }, on: { click: e => { e.stopPropagation(); x.plus(); } } }, '+'));
         if (!x.fn) return h('div', { class: 'muted menu-note' }, x.label);
-        return h('button', { class: 'menu-item' + (x.cls === 'danger' ? ' danger' : '') + (x.cls === 'conjure' ? ' conjure' : '') + (x.cls === 'env' ? ' env' : ''), role: 'menuitem', on: { click: e => { e.stopPropagation(); closeMenu(); x.fn(); } } }, x.label);
+        return h('button', { class: 'menu-item' + (x.cls === 'danger' ? ' danger' : '') + (x.cls === 'conjure' ? ' conjure' : '') + (x.cls === 'env' ? ' env' : '') + (x.cls === 'code-ability' ? ' code-ability' : ''), role: 'menuitem', on: { click: e => { e.stopPropagation(); closeMenu(); x.fn(); } } }, x.label);
       }));
     document.body.append(menu);
     const mw = menu.offsetWidth, mh = menu.offsetHeight;
@@ -1227,9 +1312,9 @@ window.Table = (() => {
       const p = s.players[pid];
       return h('div', { class: 'hud-player ' + side },
         h('span', { class: 'hud-name' }, p.name),
-        h('span', { class: 'hud-fans' }, h('strong', null, p.fans), ` / ${G().FANS_TO_WIN} fans`),
+        h('span', { class: 'hud-fans' }, h('strong', null, p.fans), ` / ${Game.winTarget(s)} fans`),
         side === 'opp' ? h('span', { class: 'hud-hand' }, `${(s.zones[pid + ':hand'] || []).length} in hand · ${(s.zones[pid + ':deck'] || []).length} in deck`) : null,
-        h('span', { class: 'hud-meter' }, h('span', { style: { width: Math.max(0, Math.min(100, (p.fans / G().FANS_TO_WIN) * 100)) + '%' } })));
+        h('span', { class: 'hud-meter' }, h('span', { style: { width: Math.max(0, Math.min(100, (p.fans / Game.winTarget(s)) * 100)) + '%' } })));
     };
 
     // group labels (Ramp 1, Ramp 2, End, Race) span their segments
@@ -1313,7 +1398,7 @@ window.Table = (() => {
         ? h('div', { class: 'hud-opps' }, rivalsOf(s, my).map(pid => h('div', { class: 'hud-opp', style: { '--pc': seatColor(pid) } },
             h('span', { class: 'seat-dot' }), h('span', { class: 'hud-name' }, s.players[pid].name),
             h('strong', null, s.players[pid].fans),
-            h('span', { class: 'hud-meter' }, h('span', { style: { width: Math.max(0, Math.min(100, (s.players[pid].fans / G().FANS_TO_WIN) * 100)) + '%' } })))))
+            h('span', { class: 'hud-meter' }, h('span', { style: { width: Math.max(0, Math.min(100, (s.players[pid].fans / Game.winTarget(s)) * 100)) + '%' } })))))
         : player(op, 'opp'),
       h('div', { class: 'hud-center' },
         h('div', { class: 'hud-top' },
@@ -1348,6 +1433,7 @@ window.Table = (() => {
   }
 
   function rollFx(s, r) {
+    Sound.play('dice');
     const PIPS = { 1: [5], 2: [1, 9], 3: [1, 5, 9], 4: [1, 3, 7, 9], 5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9] };
     const face = (n, sides) => sides === 6
       ? h('div', { class: 'die-face' }, Array.from({ length: 9 }, (_, i) => h('i', { class: PIPS[n].includes(i + 1) ? 'on' : '' })))
@@ -1417,6 +1503,7 @@ window.Table = (() => {
 
   // Dice roll for who goes first: both dice tumble, ties roll again.
   function diceFx(s, opts = {}) {
+    Sound.play('dice');
     const PIPS = { 1: [5], 2: [1, 9], 3: [1, 5, 9], 4: [1, 3, 7, 9], 5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9] };
     const face = n => h('div', { class: 'die-face' }, Array.from({ length: 9 }, (_, i) => h('i', { class: PIPS[n].includes(i + 1) ? 'on' : '' })));
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1459,6 +1546,7 @@ window.Table = (() => {
   }
 
   function showdownFx(s) {
+    Sound.play('showdown');
     document.querySelectorAll('.turn-splash, .sd-fx').forEach(e => e.remove());
     const nm = s.showdown.pid === me() ? 'You go' : `${Game.nameOf(s, s.showdown.pid)} goes`;
     const el = h('div', { class: 'sd-fx', 'aria-hidden': 'true' },
@@ -1470,6 +1558,7 @@ window.Table = (() => {
 
   // A Signature card was played: a full-screen moment for both players.
   function signatureFx(c, by) {
+    if (!Sound.play('signature')) Sound.play('card_played');
     const d = def(c);
     document.querySelectorAll('.sig-fx, .turn-splash').forEach(e => e.remove());
     const types = d.types && d.types.length ? d.types : ['wit'];
@@ -1496,6 +1585,8 @@ window.Table = (() => {
   // Big "Your turn" flash in the middle of the screen when the turn changes.
   function splash() {
     const info = turnInfo();
+    // (not on top of a card's sound that just played)
+    if (info.kind === 'mine' && Date.now() - (ui.cardSoundAt || 0) > 600) Sound.play('your_turn');
     document.querySelectorAll('.turn-splash').forEach(e => e.remove());
     const el = h('div', { class: 'turn-splash turn-' + info.kind, 'aria-hidden': 'true' },
       h('span', { class: 'splash-big' }, info.big),
@@ -1557,7 +1648,19 @@ window.Table = (() => {
       on: { change: e => { p[key] = e.target.checked; Anim.setPrefs(p); } } }), label);
     return h('details', { class: 'keys-box' }, h('summary', null, 'Effects'),
       h('div', { class: 'stack tight fx-prefs' }, cb('on', 'Play card animations'), cb('code', 'Allow custom-code animations'),
-        h('p', { class: 'hint' }, 'Only changes what you see on this computer.')));
+        soundPrefs(),
+        h('p', { class: 'hint' }, 'Only changes what you see and hear on this computer.')));
+  }
+
+  // Sound on/off and volume (just for this browser).
+  function soundPrefs() {
+    const sp = Sound.prefs();
+    const vol = h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: sp.volume, 'aria-label': 'Sound volume', disabled: !sp.on,
+      on: { change: e => { sp.volume = Number(e.target.value); Sound.setPrefs(sp); Sound.play('your_turn'); } } });
+    return h('div', { class: 'stack tight' },
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!sp.on,
+        on: { change: e => { sp.on = e.target.checked; Sound.setPrefs(sp); vol.disabled = !sp.on; if (!sp.on) Sound.stopAll(); } } }), 'Play sounds'),
+      h('label', { class: 'snd-vol' }, h('span', { class: 'muted' }, 'Volume'), vol));
   }
 
   // ---------- the chain panel ----------
@@ -1664,7 +1767,16 @@ window.Table = (() => {
     const d = def(c);
     el.replaceChildren(...[
       d.card_type === 'star' ? Cards.renderStar(d.types[0], 'm') : Cards.render(d, { size: 'l' }),
-      c.dmg || c.might || c.tmp ? h('p', { class: 'hint' }, [c.might ? `Might ${c.might > 0 ? '+' : ''}${c.might}` : '', c.tmp ? `Temp might ${c.tmp > 0 ? '+' : ''}${c.tmp}` : '', c.dmg ? `${c.dmg} damage` : ''].filter(Boolean).join(' · ')) : null].filter(Boolean));
+      c.dmg || c.might || c.tmp ? h('p', { class: 'hint' }, [c.might ? `Might ${c.might > 0 ? '+' : ''}${c.might}` : '', c.tmp ? `Temp might ${c.tmp > 0 ? '+' : ''}${c.tmp}` : '', c.dmg ? `${c.dmg} damage` : ''].filter(Boolean).join(' · ')) : null,
+      codeRulesEl(d)].filter(Boolean));
+  }
+
+  // A card's code, in plain English (for the inspect panel).
+  function codeRulesEl(d) {
+    const rules = Game.rulesFor(ui.defs, { def: d.id });
+    if (!rules.length) return null;
+    return h('div', { class: 'code-rules' }, h('p', { class: 'eyebrow' }, '✦ Card code'),
+      h('ul', null, rules.map(r => h('li', null, CardCode.explain(r)))));
   }
 
   // ---------- arrows ----------

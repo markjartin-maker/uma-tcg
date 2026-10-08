@@ -36,7 +36,7 @@ window.App = (() => {
       h('div', { class: 'brand' }, h('span', { class: 'brand-mark', 'aria-hidden': 'true' }), window.CONFIG.APP_NAME,
         app.backend.mode === 'demo' ? h('span', { class: 'pill demo' }, 'Offline demo') : null),
       app.me && app.me.allowed ? h('nav', { class: 'tabs', 'aria-label': 'Sections' },
-        [['play', 'Play'], ['cards', 'Card pool'], ['maker', 'Card maker'], ['decks', 'Decks']].map(([id, label]) =>
+        [['play', 'Play'], ['cards', 'Card pool'], ['maker', 'Card maker'], ['decks', 'Decks'], ...(app.me.admin ? [['admin', 'Admin']] : [])].map(([id, label]) =>
           h('button', { class: 'tab' + (app.view === id ? ' active' : ''), on: { click: () => go(id) } }, label))) : h('span'),
       app.me ? h('div', { class: 'me-box' },
         h('span', { class: 'me-name' }, app.me.name),
@@ -60,6 +60,7 @@ window.App = (() => {
     else if (view === 'maker') CardViews.renderMaker(el, arg);
     else if (view === 'decks') DeckViews.render(el, arg);
     else if (view === 'match') Table.open(el, arg);
+    else if (view === 'admin') AdminViews.render(el);
   }
 
   // ---------- auth ----------
@@ -196,9 +197,19 @@ window.App = (() => {
     } catch (e) { console.warn(e); }
   }
 
+  // Admin panel settings: the game's sounds and the card back image.
+  async function loadSettings() {
+    try {
+      const st = await app.backend.getSettings();
+      Sound.setLibrary(st.sounds || {});
+      Cards.setCardBack((st.card_back || {}).url || null);
+    } catch (e) { console.warn(e); }
+  }
+
   function afterLogin() {
     loadKeywords();
     loadAnimations();
+    loadSettings();
     firstRoomList = true;
     if (app.backend.watchRooms) app.lobbyCleanup.push(app.backend.watchRooms(onRooms));
     // Challenges that were already accepted before this page loaded are old:
@@ -561,7 +572,7 @@ window.App = (() => {
     }) : [h('p', { class: 'muted' }, 'No matches yet.')]));
   }
 
-  return { start, go, loadKeywords, loadAnimations, get backend() { return app.backend; }, get me() { return app.me; }, who: id => who(id), refreshProfiles: async () => { profiles = await app.backend.listProfiles(); } };
+  return { start, go, loadKeywords, loadAnimations, loadSettings, onLeave: fn => app.cleanup.push(fn), get backend() { return app.backend; }, get me() { return app.me; }, who: id => who(id), refreshProfiles: async () => { profiles = await app.backend.listProfiles(); } };
 })();
 
 document.addEventListener('DOMContentLoaded', () => App.start());

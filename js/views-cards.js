@@ -69,6 +69,8 @@ window.CardViews = (() => {
           : h('p', { class: 'muted' }, 'Made by ' + author),
         builtin ? h('div', { class: 'row' }, h('button', { class: 'btn primary', on: { click: () => { m.close(); App.go('maker', { fromBuiltin: c }); } } }, 'Customize')) : null,
         (c.keywords || []).length ? h('dl', { class: 'kw-help' }, c.keywords.map(k => Cards.KEYWORD[k] ? [h('dt', null, Cards.KEYWORD[k].label), h('dd', null, Cards.KEYWORD[k].help)] : null)) : null,
+        c.code && CardCode.compile(c.code).rules.length ? h('div', { class: 'code-rules' }, h('p', { class: 'eyebrow' }, '✦ Card code'),
+          h('ul', null, CardCode.compile(c.code).rules.map(r => h('li', null, CardCode.explain(r))))) : null,
         c.play_anim && Anim.get(c.play_anim) ? h('div', { class: 'row' }, h('span', { class: 'muted' }, `Plays: ${Anim.get(c.play_anim).name}`),
           h('button', { class: 'btn sm', on: { click: () => Anim.play(Anim.get(c.play_anim), { def: c, player: App.me.name, mine: true }) } }, '▶ Preview')) : null,
         mine && !builtin ? h('div', { class: 'row' },
@@ -504,12 +506,41 @@ window.CardViews = (() => {
     }
     drawAnimSel();
 
+    // Advanced: card code (rules the table runs; see the word list)
+    const code = h('textarea', { id: 'mk-code', class: 'code-in', rows: 4, maxlength: 4000, spellcheck: 'false', autocomplete: 'off',
+      placeholder: 'e.g.  while on board: enemy tricks cost +2', on: { input: () => { card.code = code.value; drawCode(); } } });
+    code.value = card.code || '';
+    const codeOut = h('div', { class: 'code-out', 'aria-live': 'polite' });
+    function drawCode() {
+      const { rules, errors: errs } = CardCode.compile(code.value);
+      code.rows = Math.min(14, Math.max(4, code.value.split('\n').length + 1));
+      codeOut.replaceChildren(
+        ...rules.map(r => h('p', { class: 'code-ok' }, h('b', null, `Line ${r.line}`), ' ', CardCode.explain(r))),
+        ...errs.map(x => h('p', { class: 'code-err' }, h('b', null, `Line ${x.line}`), ' ', x.message)));
+    }
+    const addRule = h('select', { 'aria-label': 'Add a rule from an example', on: { change: () => {
+      const t = CardCode.TEMPLATES[Number(addRule.value)];
+      addRule.value = '';
+      if (!t) return;
+      code.value = (code.value.trim() ? code.value.replace(/\s*$/, '') + '\n' : '') + t[1];
+      card.code = code.value;
+      drawCode();
+      code.focus();
+    } } }, h('option', { value: '' }, '+ Add rule…'), CardCode.TEMPLATES.map((t, i) => h('option', { value: String(i) }, t[0])));
+    const R = CardCode.REFERENCE;
+    const wordList = h('details', { class: 'code-ref' }, h('summary', null, 'Word list'),
+      [['Start a line with', R.starts], ['Which cards', R.cards], ['Changes (while / always)', R.changes], ['Actions (when / ability)', R.actions], ['Extras', R.extras]]
+        .map(([t, list]) => h('div', null, h('p', { class: 'eyebrow' }, t), h('ul', null, list.map(x => h('li', null, h('code', null, x)))))));
+    drawCode();
+
     const save = h('button', { class: 'btn primary', type: 'submit' }, editing ? 'Save changes' : 'Add to card pool');
     const form = h('form', { class: 'maker-form', on: { submit: async e => {
       e.preventDefault();
       if (!card.keywords.includes('conjure')) card.conjure = null;
       else card.conjure = cjs.length === 1 ? { ...cjs[0] } : cjs.map(x => ({ ...x }));
       const errs = Cards.validate(card);
+      card.code = code.value.trim() || null;
+      for (const x of CardCode.compile(card.code).errors) errs.push(`Card code, line ${x.line}: ${x.message}`);
       errors.replaceChildren(...errs.map(x => h('li', null, x)));
       if (errs.length) return;
       save.disabled = true;
@@ -540,11 +571,14 @@ window.CardViews = (() => {
       h('div', { class: 'field' }, h('label', { for: 'mk-effect' }, 'Effect text'), effect, counter, tools),
       h('div', { class: 'field' }, h('label', { for: 'mk-art' }, 'Card art'), h('div', { class: 'row wrap' }, file, pasteBtn, adjust, clearArt), dropZone,
         h('p', { class: 'hint' }, 'PNG, JPG, WebP or GIF, up to 15 MB. You crop it to the card after choosing it (it\'s saved as a smaller image). If you switch full art on or off, press Adjust crop to re-frame it. Use art you made or have permission to use.')),
-      h('details', { class: 'advanced', open: !!card.play_anim },
+      h('details', { class: 'advanced', open: !!(card.play_anim || card.code) },
         h('summary', null, 'Advanced'),
         h('div', { class: 'field' }, h('label', { for: 'mk-anim' }, 'Play animation'),
           h('div', { class: 'row wrap' }, animSel, animPreviewBtn, animEditBtn, h('button', { type: 'button', class: 'btn sm ghost', on: { click: () => animModal(null, afterAnimSave, previewDef) } }, '+ New animation')),
-          h('p', { class: 'hint' }, 'Plays over the table for both players when this card is played (or when it\'s revealed, if it was played face-down). On a Signature card it replaces the built-in Signature moment.'))),
+          h('p', { class: 'hint' }, 'Plays over the table for both players when this card is played (or when it\'s revealed, if it was played face-down). On a Signature card it replaces the built-in Signature moment.')),
+        h('div', { class: 'field' }, h('label', { for: 'mk-code' }, 'Card code'),
+          h('p', { class: 'hint' }, 'Rules the table runs for you, one per line. "while" and "always" rules change costs and might automatically. "when" rules ask you "Do it / Skip?" when they happen. "ability" adds an item to the card\'s right-click menu.'),
+          code, h('div', { class: 'row wrap' }, addRule), codeOut, wordList)),
       errors,
       h('div', { class: 'row' },
         h('button', { type: 'button', class: 'btn ghost', on: { click: () => App.go('cards') } }, 'Cancel'),
@@ -672,6 +706,10 @@ window.CardViews = (() => {
         h('code', null, 'PLAY'), ' tells you about the card: ', h('code', null, 'PLAY.name, PLAY.colors, PLAY.art, PLAY.player, PLAY.mine, PLAY.duration'), '.'),
       code,
       h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn sm ghost', on: { click: () => { code.value = a.code = Anim.CODE_TEMPLATE; } } }, 'Reset to starter code')));
+    // sound (both kinds): plays with the animation
+    const soundField = h('div', { class: 'field' }, h('label', { for: 'am-snd' }, 'Sound (optional)'),
+      AdminViews.soundPicker(cfg.sound || null, v => { if (v) cfg.sound = v; else delete cfg.sound; }, { id: 'am-snd' }),
+      h('p', { class: 'hint' }, 'Plays with the animation for everyone (MP3, OGG, WAV, M4A or WebM, up to 5 MB). It replaces the "Card played" sound for cards that use this animation.'));
     const err = h('p', { class: 'form-error' });
     const preview = h('button', { class: 'btn', on: { click: () => {
       if (!Anim.play({ ...a }, { def: (sampleDef && sampleDef()) || { name: 'Sample Card', types: ['speed', 'wit'] }, player: App.me.name, mine: true })) U.toast('Animations (or code animations) are switched off in this browser: table sidebar → Effects.');
@@ -694,6 +732,7 @@ window.CardViews = (() => {
       h('div', { class: 'field' }, h('label', { for: 'am-name' }, 'Name'), name),
       kindRow, presetBox, codeBox,
       h('div', { class: 'field' }, h('label', { for: 'am-dur' }, 'Duration (seconds, 0.5–6)'), dur),
+      soundField,
       err,
       h('div', { class: 'row between' }, del || h('span'), h('div', { class: 'row' }, preview, save))), { wide: true });
     drawKind();

@@ -179,6 +179,11 @@ create policy "delete own animations (admins: any)" on public.animations
 -- The animation a card plays when it's played.
 alter table public.cards add column if not exists play_anim uuid references public.animations on delete set null;
 
+-- Card code: rules written on cards in the small card language (see README).
+alter table public.cards add column if not exists code text;
+alter table public.cards drop constraint if exists cards_code_length;
+alter table public.cards add constraint cards_code_length check (code is null or char_length(code) <= 4000);
+
 -- ---------------------------------------------------------------------
 -- 4. Decks
 --    cards: {"<card id>": copies, ...}   stars: {"speed": 6, "wit": 6}
@@ -438,6 +443,57 @@ create policy "friends delete own card art" on storage.objects
   for delete to authenticated
   using (
     bucket_id = 'card-art'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+-- ---------------------------------------------------------------------
+-- 8b. Admin panel settings (sounds, card back) and the sounds bucket
+-- ---------------------------------------------------------------------
+-- Site-wide settings that admins choose (sounds, the card back image).
+create table if not exists public.app_settings (
+  key text primary key check (char_length(key) between 1 and 40),
+  value jsonb not null default '{}'::jsonb,
+  updated_by uuid default auth.uid(),
+  updated_at timestamptz not null default now()
+);
+alter table public.app_settings enable row level security;
+
+drop policy if exists "friends can read settings" on public.app_settings;
+create policy "friends can read settings" on public.app_settings
+  for select using (public.is_allowed());
+drop policy if exists "admins can add settings" on public.app_settings;
+create policy "admins can add settings" on public.app_settings
+  for insert with check (public.is_admin());
+drop policy if exists "admins can change settings" on public.app_settings;
+create policy "admins can change settings" on public.app_settings
+  for update using (public.is_admin()) with check (public.is_admin());
+drop policy if exists "admins can delete settings" on public.app_settings;
+create policy "admins can delete settings" on public.app_settings
+  for delete using (public.is_admin());
+
+-- Sound files (for the admin panel and for animations).
+-- Public bucket like card art; friends upload into their own folder.
+-- Audio only, max 5 MB — enforced by Supabase, not the website.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('sounds', 'sounds', true, 5242880,
+        array['audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/wav', 'audio/x-wav', 'audio/wave',
+              'audio/webm', 'audio/mp4', 'audio/aac', 'audio/x-m4a'])
+on conflict (id) do update set public = true, file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "friends upload sounds" on storage.objects;
+create policy "friends upload sounds" on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'sounds'
+    and public.is_allowed()
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+drop policy if exists "friends delete own sounds" on storage.objects;
+create policy "friends delete own sounds" on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'sounds'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
